@@ -21,11 +21,6 @@ def get_spark(cores=4, memory="8g", local_dir="/mnt/data/tmp", **kwargs):
         builder = builder.config(k, v)
     return builder.getOrCreate()
 
-def get_local_spark():
-    spark = SparkSession.builder \
-    .appName("LocalSpark") \
-    .getOrCreate()
-    return spark
 
 @contextmanager
 def spark_resource(*args, **kwargs):
