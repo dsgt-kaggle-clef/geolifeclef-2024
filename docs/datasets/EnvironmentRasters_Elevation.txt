@@ -1,0 +1,12 @@
+                        ASTGTM v003, ASTER Global Digital Elevation Model 1 arc second
+
+- The Terra Advanced Spaceborne Thermal Emission and Reflection Radiometer (ASTER) Global Digital Elevation Model (GDEM) Version 3 (ASTGTM) provides a global digital elevation model (DEM) of land areas on Earth at a spatial resolution of 1 arc second (approximately 30 meter horizontal posting at the equator). Source [1]
+
+- Further data description: [1] https://lpdaac.usgs.gov/products/astgtmv003/
+
+- Data download point: https://search.earthdata.nasa.gov
+Bounding box used to restrain the data query: min_x, min_y, max_x, max_y = -32.26344, 26.63842, 35.58677, 72.18392
+
+- DEM .tif files were merged and converted to a compressed Cloud Optimized Geotiff thanks to GDAL tools.
+- Projection: EPSG:4326 (WGS84)
+- Data type: Int16.

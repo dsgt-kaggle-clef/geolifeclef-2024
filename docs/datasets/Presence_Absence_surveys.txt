@@ -1,0 +1,20 @@
+This standardized species observation combines four datasets from the Global Biodiversity Information Facility (GBIF, www.gbif.org), the Conservatoires Botaniques Nationaux Méditerranéen (CBNmed) and Alpin (CBNA).
+
+The file Presences_Absences_train.csv is meant to be a validation set whose sampling scheme is fully coherent with the test set. It was obtained by subsetting a larger presence-absence dataset based on a spatial block hold out procedure (see the evaluation tab of our Kaggle page) while the complementary subset was used as a test set.
+
+Presences_Absences_train.csv summarizes around 5 000 presence-absence surveys. Each survey is an inventory of all plant species found in a small plot (between 10m² and 400m²) at a specific date between 2017 and 2021 by professional (CBNmed, CBNA) or trained botanists (IGN, National Plant Monitoring Scheme). This data was selected to cover a wide range of habitats in France and the United Kingdom, excluding northern Ireland.
+
+In addition to the main columns described in our Kaggle page (patchID, timeSerieID, speciesId, ), the file contains the following columns:
+glcID: This is the row identifier.
+datasetName: String, Name of the survey source dataset
+observer: String, Name of the observer who carried the survey. This field was not always filled.
+date: String, day of the survey in format yyyy-mm-dd. This field was not always filled, but may be fully recovered from the columns year (integer) and dayOfYear (integer between 1 and 366).
+x_EPSG3035: Numeric, projected longitude coordinate in meters under projection LAEA Europe (EPSG:3035).
+y_EPSG3035: Numeric, projected latitude coordinate in meters under projection LAEA Europe (EPSG:3035). For instance, it is recommended to compute euclidean distances between points based on these columns rather than the lon/lat columns (unprojected).
+geoUncertaintyInM: Radius of uncertainty of the occurrence geolocation in meters.
+gbifID: If the survey comes from GBIF, this column provides the occurrence id in GBIF, otherwise it is NA.
+
+NOTE: In the solution file (test set), a sample corresponds to a unique combination of patchID and dayOfYear column values. So, for each of these combinations, a unique identifier was defined and used as the row id in the solution file used for the evaluation by  Kaggle. Thus, it is recommended for participants to also use the combination patchID and dayOfYear as a sampling unit to best learn species composition patterns in Presences_Absences_train.csv.
+
+The extraction of GBIF data was made on the 8th of november 2022:  https://doi.org/10.15468/dl.4ysfh4
+The Conservatoire Botanique National Méditerranéen (http://www.cbnmed.fr/src/prez.php) and Conservatoire Botanique National Alpin (http://www.cbn-alpin.fr/) shared a part of their survey data for the purpose of GeoLifeCLEF 2023. This data may be freely used for research purposes related to this competition.

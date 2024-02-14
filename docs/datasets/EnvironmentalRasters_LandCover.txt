@@ -1,0 +1,38 @@
+Land cover (MODIS Terra+Aqua 500m)
+- Land Cover product were downloaded at:
+            https://ladsweb.modaps.eosdis.nasa.gov/missions-and-measurements/products/MCD12Q1/#overview
+
+- .hdf files were merged thanks to gdal functions into a single multi-band geotiff, reprojected in WGS84 and cropped into bounding box of interest:
+         min_x, min_y, max_x, max_y = -32.26344, 26.63842, 35.58677, 72.18392
+
+
+- Documentation for the MODIS Land Cover product is accessible at:
+            https://www.bu.edu/lcsc/data-documentation/
+
+- More specifically, the User Guide to Collection 6 MODIS Land Cover (MCD12Q1 and MCD12C1) Product accessible at:
+            https://lpdaac.usgs.gov/documents/101/MCD12_User_Guide_V6.pdf precises all 13 bands meaning.
+
+    - We reproduced and adapted the summary Table 1 below. Be careful the band order is different from the hdf files    subdatasets order.
+    - We advice the interested user to explore other tables from this pdf to interpret band values meaning.
+
+
+
+Table 1: MCD12Q1 Science Data Sets. All bands are 8-bit unsigned and have a 255 fill value.
+
+
+Band    | SDS Full Name                       | Short Name    | Description                       | Units | Valid Range
+--------------------------------------------------------------------------------------------------------------
+1       | Land Cover Type 1                   | LC_Type1      | Annual IGBP classification        | Class | [1,17]
+2       | Land Cover Type 2                   | LC_Type2      | Annual UMD classification         | Class | [0,15]
+3       | Land Cover Type 3                   | LC_Type3      | Annual LAI classification         | Class | [0,10]
+4       | Land Cover Type 4                   | LC_Type4      | Annual BGC classification         | Class | [0,8]
+5       | Land Cover Type 5                   | LC_Type5      | Annual PFT classification         | Class | [0,11]
+6       | Land Cover Property 1 Assessment    | LC_Prop1_Ass  | LCCS1 land cover layer confidence | % x100| [0,100]
+7       | Land Cover Property 2 Assessment    | LC_Prop2_Ass  | LCCS2 land use layer confidence   | % x100| [0,100]
+8       | Land Cover Property 3 Assessment    | LC_Prop3_Ass  | LCCS3 surface hydro. layer confid.| % x100| [0,100]
+9       | Land Cover Property 1               | LC_Prop1      | LCCS1 land cover layer            | Class | [1,43]
+10      | Land Cover Property 2               | LC_Prop2      | LCCS2 land use layer              | Class | [1,40]
+11      | Land Cover Property 3               | LC_Prop3      | LCCS3 surface hydrology layer     | Class | [1,51]
+12      | Land Cover QC                       | QC            | Product quality flags             | Flags | [0,10]
+13      | Land Water Mask                     | LW            | Binary land (class 2) / water     | Class | [0,2]
+                                                                (class 1) mask derived from MOD44W

@@ -1,0 +1,34 @@
+[1] Data source: Venter, Oscar et al. (2016), Data from: Global terrestrial Human Footprint maps for 1993 and 2009, Dryad, Dataset, https://doi.org/10.5061/dryad.052q5
+
+[2] Scientific article: Venter, O. et al. Global terrestrial Human Footprint maps for 1993 and 2009. Sci. Data 3:160067 doi: 10.1038/sdata.2016.67 (2016) .
+Consult their Dryad data repository and scientific article for more information.
+
+
+    • All rasters were reprojected from Mollweide (ESRI:54009) to WGS84 (EPSG:4326) and cropped in the area of interest. Bounding box in lon/lat is:
+      min_x, min_y, max_x, max_y = -32.26344, 26.63842, 35.58677, 72.18392
+
+    • Detailed rasters were overlaid to create the standardized Human Footprint maps for all non-Antarctic land areas (i.e. summarized rasters). Consults [2] method for details.
+
+
+Table 1. The name, description and type of data included in detailed/ and summarized/ folders.
+Adapted from [1] Data description.docx. All files are GeoTIFF and in EPSG=4326 projection.
+
+Name                    | Description                                                                   | Folder
+---------------------------------------------------------------------------------------------------------------------
+HFP1993_WGS84.tif       | The Human Footprint camp of cumulative pressures on the environment in 1993.  | summarized
+HFP2009_WGS84.tif       | The Human Footprint camp of cumulative pressures on the environment in 2009.  | summarized
+
+Built1994_WGS84.tif     | Individual pressure map of built environments in 1994.                        | detailed
+Built2009_WGS84.tif     | Individual pressure map of built environments in 2009.                        | detailed
+Croplands1992_WGS84.tif | Individual pressure map of crop lands in 1992.                                | detailed
+Croplands2005_WGS84.tif | Individual pressure map of crop lands in 2005.                                | detailed
+Lights1994_WGS84.tif    | Individual pressure map of night-time lights in 1994.                         | detailed
+Lights2009_WGS84.tif    | Individual pressure map of night-time lights in 2009.                         | detailed
+Navwater1994_WGS84.tif  | Individual pressure map of navigable waterways in 1994.                       | detailed
+Navwater2009_WGS84.tif  | Individual pressure map of navigable waterways in 2009.                       | detailed
+Pasture1993_WGS84.tif   | Individual pressure map of pasture lands in 1993.                             | detailed
+Pasture2009_WGS84.tif   | Individual pressure map of pasture lands in 2009.                             | detailed
+Popdensity1990_WGS84.tif| Individual pressure map of human population density in 1990.                  | detailed
+Popdensity2010_WGS84.tif| Individual pressure map of human population density in 2010.                  | detailed
+Railways_WGS84.tif      | Individual pressure map of railways circa 1990.                               | detailed
+Roads_WGS84.tif         | Individual pressure map of roads circa 2000.                                  | detailed

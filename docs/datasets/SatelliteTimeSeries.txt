@@ -1,0 +1,20 @@
+These time series data (time_series_<band>.csv) combines over 20 years of satellite imagery across all of Europe thanks to Ecodatacube (https://stac.ecodatacube.eu/) which hosts many satellite view datasets.
+
+The data was acquired through the Landsat satellite program and pre-processed by Ecodatacube to produce raster files scaled to the entire european continent and projected into a unique CRS.
+We filtered the data in order to pick values from each spectral band corresponding to a location ((lon, lat) GPS coordinates) matching that of our occurrences', over a time window, and aggregated them in CSV files.
+
+The time window considered for picking values is the quarter. Meaning each value corresponds to the mean value of Landsat's observations at the given location for 3 months prior to the given time, e.g. the value of a time series element under column 2012_4 will represent the mean value for that element from October 2012 to December 2012 included.
+
+Each element is identified by a unique timeSerieID determined from the intersection of the occurrences' "patchID" and quarterly split "date" columns.
+
+The files contain the following columns:
+timeSerieID: The time series identifier.
+<year>_<quarter>: Temporal window of study containing values in the range [0-255].
+
+
+The extraction of EcodataCube data was made on the 3rd of march 2023.
+
+Citations:
+- Traceability (lineage): This dataset is a seasonally aggregated and gapfilled version of the Landsat GLAD analysis-ready data product presented by Potapov et al., 2020 ( https://doi.org/10.3390/rs12030426 ).
+- Scientific methodology: The Landsat GLAD ARD dataset was aggregated and harmonized using the eumap python package (available at https://eumap.readthedocs.io/en/latest/ ). The full process of gapfilling and harmonization is described in detail in Witjes et al., 2022 (in review, preprint available at https://doi.org/10.21203/rs.3.rs-561383/v3 ).
+- Ecodatacube.eu: Analysis-ready open environmental data cube for Europe (https://doi.org/10.21203/rs.3.rs-2277090/v3)

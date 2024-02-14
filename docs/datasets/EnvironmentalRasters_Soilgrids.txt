@@ -1,0 +1,23 @@
+SoilGrids 2.0 rasters corresponding to nine pedological variables at 5-15cm depth and covering Europe.
+Resolution is approx. 1km and coordinate system is WGS84. This is the aggregated version of SoilGrids rasters derived by resampling at 1km the mean initial predictions at 250m for each property.
+
+SoilGrids is a system for global digital soil mapping that uses machine learning methods to map the spatial distribution of soil properties across the globe. SoilGrids prediction models are fitted at 250m resolution using over 230 000 soil profile observations from the WoSIS database and a series of environmental covariates. The SoilGrids maps are publicly available under the [CC-BY 4.0 License](https://creativecommons.org/licenses/by/4.0/).
+
+The SoilGrids rasters were downloaded in january 2023 from https://files.isric.org/soilgrids/latest/data_aggregated/1000m/
+Each raster was cropped to the extent of GLC2023 study area.
+
+Variables description:
+"crop_proj_bdod_5-15cm_mean_1000.tif": Bulk density (cg/cm3)
+"crop_proj_cec_5-15cm_mean_1000.tif": Cation exchange capacity at ph 7 (mmol(c)/kg)
+"crop_proj_cfvo_5-15cm_mean_1000.tif": Coarse fragments in cm3/dm3
+"crop_proj_clay_5-15cm_mean_1000.tif": Clay content in g/kg
+"crop_proj_nitrogen_5-15cm_mean_1000.tif": Nitrogen in cg/kg
+"crop_proj_phh2o_5-15cm_mean_1000.tif": pH water (pH *10)
+"crop_proj_sand_5-15cm_mean_1000.tif": Sand in g/kg
+"crop_proj_silt_5-15cm_mean_1000.tif": Silt in g/kg
+"crop_proj_soc_5-15cm_mean_1000.tif": Soil organic carbon (dg/kg)
+
+Further documentation on the Soilgrid rasters: https://www.isric.org/explore/soilgrids
+
+Reference:
+Poggio, L., De Sousa, L. M., Batjes, N. H., Heuvelink, G., Kempen, B., Ribeiro, E., & Rossiter, D. (2021). SoilGrids 2.0: producing soil information for the globe with quantified spatial uncertainty. Soil, 7(1), 217-240.

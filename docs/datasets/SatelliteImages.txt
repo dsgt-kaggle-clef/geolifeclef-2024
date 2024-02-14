@@ -1,0 +1,12 @@
+These archives contain 128x128 pixel jpeg files of RGB and NIR satellite patches (four bands) centered on our occurrences' locations.
+
+The data was acquired through the Sentinel2 satellite program and pre-processed by Ecodatacube to produce raster files scaled to the entire european continent and projected into a unique CRS.
+We filtered the data in order to pick patches from each spectral band corresponding to a location ((lon, lat) GPS coordinates) and a date matching that of our occurrences', and split them into JPEG files (RGB in 3-channels .jpeg files, NIR in single-channel .jpeg files). The images where converted from sentinel uint15 to uint8 by clippind data pixels values over 10000 and applying a gamma correction of 2.5.
+
+Access: One first needs to download and decompress the files patchs_rgb.zip and patchs_nir.zip (located in /SatelliteImages/), generating the folders ./rgb and ./nir respectively. Each contains around 4 millions JPEG images organised in a folder tree of depth two. Each JPEG file is named with a numeric identifier called the "patchID" representing a unique combination of geolocation and year. To recover the RGB (resp. NIR) patch of a species observation, the patchID column of the occurrence CSV is the key to the file path with the rule '.../CD/AB/XXXXABCD.jpeg'. For instance, the path to RGB image of patchID=3018575 is "./rgb/75/85/3018575.jpeg". In the case where the patchID has less than 4 decimals, just add zeros before to get the folder path.
+
+The extraction of EcodataCube data was made on the 10th of february 2023.
+
+Citations:
+- Traceability (lineage): The dataset was produced entirely by mosaicking and seasonally aggregating imagery from the Sentinel-2 Level-2A product (https://sentinels.copernicus.eu/web/sentinel/user-guides/sentinel-2-msi/product-types/level-2a)
+- Ecodatacube.eu: Analysis-ready open environmental data cube for Europe (https://doi.org/10.21203/rs.3.rs-2277090/v3)
