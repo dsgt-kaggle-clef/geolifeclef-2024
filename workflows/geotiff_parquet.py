@@ -1,100 +1,94 @@
+"""Convert tif files into parquet files that contain tiles of the original image.
+
+usage:
+    python -m workflows.geotiff_parquet
+"""
+
 import os
+import shutil
 from pathlib import Path
 
+import gdal2tiles
 import luigi
-import rasterio
-from luigi.contrib.external_program import ExternalProgramTask
-from pyspark.sql import Row
-from pyspark.sql.types import (
-    BinaryType,
-    IntegerType,
-    StringType,
-    StructField,
-    StructType,
-)
-from rasterio.windows import Window
+import luigi.contrib.gcs
 
-from geolifeclef.utils import get_spark
+from geolifeclef.utils import spark_resource
 
 
-class LoadDataset(ExternalProgramTask):
-    script_path = "script/download_dataset.sh"
-    url = luigi.Parameter(
-        default="gs://dsgt-clef-geolifeclef-2024/data/raw/EnvironmentalRasters/Climate/BioClimatic_Average_1981-2010"
-    )
-    download_path = luigi.Parameter(default="/mnt/data/download")
+# https://github.com/tehamalab/gdal2tiles
+class GDALTilingTask(luigi.Task):
+    input_path = luigi.Parameter()
+    output_path = luigi.Parameter()
+    zoom = luigi.IntParameter(default=7)
+    nb_processes = luigi.IntParameter(default=2)
+    tmp_dir = luigi.Parameter(default="/mnt/data/tmp")
 
-    def program_args(self):
-        return [self.script_path, self.url, self.download_path]
-
-
-class PreProcess(ExternalProgramTask):
-    script_path = "script/preprocess.sh"
-    tile_size = luigi.IntParameter(default=256)
-    process_path = luigi.Parameter(default="/mnt/data/processed")
-    download_path = luigi.Parameter(default="/mnt/data/download")
-
-    def requires(self):
-        return [LoadDataset(download_path=self.download_path)]
-
-    def program_args(self):
-        return [
-            self.script_path,
-            self.process_path,
-            self.download_path,
-            str(self.tile_size),
-            str(self.tile_size),
-        ]
-
-
-class ParquetConversion(luigi.Task):
-    output_path = luigi.Parameter(default="paraquet_local")
-    process_dir = luigi.Parameter(default="/mnt/data/processed")
-
-    def requires(self):
-        return [PreProcess()]
-
-    def read_tiled_tiff(self, tiff_path):
-        with rasterio.open(tiff_path) as src:
-            print(src.meta)
-            for band in range(src.meta["count"]):
-                for _, window in src.block_windows(band):
-                    data = src.read(window=window)
-                    binary_data = data.tobytes()
-
-                    tile_x, tile_y = window.col_off, window.row_off
-                    tile_x, tile_y = int(tile_x), int(tile_y)
-                    yield tile_x, tile_y, binary_data, (band + 1)
+    def output(self):
+        return luigi.LocalTarget((Path(self.output_path) / "_SUCCESS").as_posix())
 
     def run(self):
-        spark = get_spark()
-        schema = StructType(
-            [
-                StructField("x", IntegerType(), True),
-                StructField("y", IntegerType(), True),
-                StructField("filename", StringType(), True),
-                StructField("band", IntegerType(), True),
-                StructField("binary_data", BinaryType(), True),
-            ]
+        # move things over into the tmp directory
+        copy_input_path = Path(self.tmp_dir) / Path(self.input_path).name
+        copy_input_path.parent.mkdir(parents=True, exist_ok=True)
+
+        if self.input_path.startswith("gs://"):
+            client = luigi.contrib.gcs.GCSClient()
+            fp = client.download(self.input_path)
+            copy_input_path.write_bytes(fp.read())
+            fp.close()
+        else:
+            shutil.copy(self.input_path, copy_input_path)
+
+        # now actually tile the
+        gdal2tiles.generate_tiles(
+            copy_input_path.as_posix(),
+            self.output_path,
+            zoom=self.zoom,
+            nb_processes=self.nb_processes,
         )
 
-        # Assuming you have a list of TIFF paths
-        process_dir = Path(self.process_dir)
-        rows = []
-        for path in process_dir.glob("*.tif"):
-            for x, y, data, band in self.read_tiled_tiff(path):
-                rows.append(
-                    Row(
-                        x=x,
-                        y=y,
-                        filename=os.path.basename(path),
-                        band=band,
-                        binary_data=data,
-                    )
-                )
-        df = spark.createDataFrame(rows, schema)
-        df.write.parquet(self.output_path)
+
+class ParquetTask(luigi.Task):
+    input_path = luigi.Parameter()
+    output_path = luigi.Parameter()
+    partitions = luigi.IntParameter(default=8)
+
+    def output(self):
+        return luigi.contrib.gcs.GCSFlagTarget(f"{self.output_path}/")
+
+    def run(self):
+        with spark_resource() as spark:
+            df = (
+                spark.read.format("binaryFile")
+                .option("pathGlobFilter", "*.png")
+                .option("recursiveFileLookup", "true")
+                .load(self.input_path)
+            )
+            df.repartition(self.partitions).write.parquet(self.output_path)
+
+
+class Workflow(luigi.Task):
+    input_path = luigi.Parameter()
+    output_path = luigi.Parameter()
+    zoom = luigi.IntParameter(default=7)
+
+    def run(self):
+        tiling_task = GDALTilingTask(
+            input_path=self.input_path,
+            output_path=self.output_path,
+            zoom=self.zoom,
+        )
+        yield tiling_task
 
 
 if __name__ == "__main__":
-    luigi.run(["ParquetConversion", "--local-scheduler"])
+    luigi.build(
+        [
+            Workflow(
+                input_path="gs://dsgt-clef-geolifeclef-2024/data/raw/EnvironmentalRasters/Climate/BioClimatic_Average_1981-2010/bio1.tif",
+                output_path="/mnt/data/tmp/test_tiles",
+            ),
+        ],
+        scheduler_host="services.us-central1-a.c.dsgt-clef-2024.internal",
+        workers=os.cpu_count(),
+    )

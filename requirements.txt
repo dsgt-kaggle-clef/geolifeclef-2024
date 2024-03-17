@@ -9,6 +9,12 @@ torch
 torchvision
 transformers
 
+gdal2tiles
+tqdm
+luigi
+google-api-python-client
+google-auth
+
 # developer tools
 jupyterlab
 black
