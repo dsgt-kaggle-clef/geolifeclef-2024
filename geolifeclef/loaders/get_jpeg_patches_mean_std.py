@@ -80,7 +80,7 @@ def standardize(
             else output
         )
         df = pd.DataFrame(stats)
-        df.to_csv(output, index=False, sep=";")
+        df.to_csv(output, index=False, sep=",")
     return stats["mean"][0], stats["std"][0]
 
 

@@ -10,6 +10,7 @@ import logging
 import math
 import os
 from abc import abstractmethod
+from pathlib import Path
 from random import random
 
 import matplotlib.pyplot as plt
@@ -135,7 +136,7 @@ class RasterPatchProvider(PatchProvider):
             # iterate through all the layers
             for i in range(src.count):
                 # replace the NoData values with np.nan
-                self.data = self.data.astype(np.float)
+                self.data = self.data.astype(np.float64)
                 self.data[i] = np.where(
                     self.data[i] == self.nodata_value[i], np.nan, self.data[i]
                 )
@@ -320,34 +321,43 @@ class JpegPatchProvider(PatchProvider):
         }
         if not select:
             sub_dirs = next(os.walk(root_path))[1]
-            select = [k for k, v in self.channel_folder.items() if v in sub_dirs]
+            select = [
+                k
+                for k, v in self.channel_folder.items()
+                if any([v in dir for dir in sub_dirs])
+            ]
 
         self.channels = [c.lower() for c in select]
         self.nb_layers = len(self.channels)
         self.bands_names = self.channels
 
+        # load a single image to get the size of the patches
+        testItem = {"surveyId": 2000200}
+        self.__getitem__(testItem)
+
     def __getitem__(self, item):
         """Return a tensor composed of every channels of a jpeg patch.
 
         Args:
-            item (dict): dictionary containing the patchID necessary to
+            item (dict): dictionary containing the surveyId necessary to
                          identify the jpeg patch to return.
 
         Raises:
-            KeyError: the 'patchID' key is missing from item
+            KeyError: the 'surveyId' key is missing from item
             Exception: item is not a dictionary as expected
 
         Returns:
             (tensor): multi-channel patch tensor.
         """
         try:
-            id_ = str(int(item["patchID"]))
+            surveyId = int(item["surveyId"])
+            id_ = f"{surveyId}"
         except KeyError as e:
-            raise KeyError("The patchID key does not exists.")
+            raise KeyError("The surveyId key does not exists.")
         except Exception as e:
             raise Exception(
-                "An error has occurred when trying to load a patch patchID."
-                'Check that the input argument is a dict containing the "patchID" key.'
+                "An error has occurred when trying to load a patch surveyId."
+                'Check that the input argument is a dict containing the "surveyId" key.'
             )
 
         # folders that contain patches
@@ -357,14 +367,11 @@ class JpegPatchProvider(PatchProvider):
 
         for channel in self.channels:
             if channel not in list_tensor["order"]:
-                path = os.path.join(
-                    self.root_path,
-                    self.channel_folder[channel],
-                    sub_folder_1,
-                    sub_folder_2,
-                    id_ + self.ext,
-                )
+                pattern = f"*{self.channel_folder[channel]}*/{sub_folder_1}/{sub_folder_2}/{id_}{self.ext}"
+                paths = sorted(Path(self.root_path).glob(pattern))
+
                 try:
+                    path = paths[0]
                     img = np.asarray(Image.open(path))
                     if set(["red", "green", "blue"]).issubset(
                         self.channels
@@ -378,13 +385,13 @@ class JpegPatchProvider(PatchProvider):
                         list_tensor["order"].append(channel)
                 except Exception as e:
                     logging.critical(
-                        "Could not open {} properly. Setting array to 0.".format(path)
+                        f"Could not open pattern {pattern} properly. Setting array to 0."
                     )
                     img = np.zeros((1, self.patch_size, self.patch_size))
                     list_tensor["order"].append(channel)
                 if self.normalize:
                     if os.path.isfile(self.dataset_stats):
-                        df = pd.read_csv(self.dataset_stats, sep=";")
+                        df = pd.read_csv(self.dataset_stats, sep=",")
                         mean, std = df.loc[0, "mean"], df.loc[0, "std"]
                     else:
                         mean, std = jpeg_standardize(

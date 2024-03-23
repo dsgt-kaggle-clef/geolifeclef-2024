@@ -23,9 +23,9 @@ class PatchesDataset(Dataset):
         providers,
         transform=None,
         target_transform=None,
-        id_name="glcID",
+        id_name="surveyId",
         label_name="speciesId",
-        item_columns=["lat", "lon", "patchID"],
+        item_columns=["lat", "lon", "surveyId"],
     ):
         self.occurrences = Path(occurrences)
         self.base_providers = providers
@@ -33,7 +33,7 @@ class PatchesDataset(Dataset):
         self.target_transform = target_transform
         self.provider = MetaPatchProvider(self.base_providers, self.transform)
 
-        df = pd.read_csv(self.occurrences, sep=";", header="infer", low_memory=False)
+        df = pd.read_csv(self.occurrences, sep=",", header="infer", low_memory=False)
 
         self.observation_ids = df[id_name].values
         self.items = df[item_columns]
@@ -66,9 +66,9 @@ class PatchesDatasetMultiLabel(PatchesDataset):
         providers,
         transform=None,
         target_transform=None,
-        id_name="glcID",
+        id_name="surveyId",
         label_name="speciesId",
-        item_columns=["lat", "lon", "patchID"],
+        item_columns=["lat", "lon", "surveyId"],
     ):
         super().__init__(
             occurrences,
