@@ -52,7 +52,7 @@ class PatchesDataset(Dataset):
         if self.target_transform:
             target = self.target_transform(target)
 
-        return torch.from_numpy(patch).float(), target
+        return torch.from_numpy(patch).float(), target, item
 
     def plot_patch(self, index):
         item = self.items.iloc[index].to_dict()
