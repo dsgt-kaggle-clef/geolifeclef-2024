@@ -247,7 +247,7 @@ class MultipleRasterPatchProvider(PatchProvider):
             rasters_paths = [f for f in files if f.endswith(".tif")]
         self.rasters_providers = [
             RasterPatchProvider(
-                rasters_folder + path,
+                os.path.join(rasters_folder, path),
                 size=size,
                 spatial_noise=spatial_noise,
                 normalize=normalize,
