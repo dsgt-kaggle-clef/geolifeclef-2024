@@ -4,6 +4,7 @@ usage:
     python -m workflows.geotiff_parquet
 """
 
+import os
 from multiprocessing import Pool
 from pathlib import Path
 
@@ -27,13 +28,15 @@ class TilingTask(luigi.Task):
     meta_path = luigi.Parameter()
     output_path = luigi.Parameter()
     batch_size = luigi.IntParameter(default=100)
-    num_workers = luigi.IntParameter(default=4)
+    num_workers = luigi.IntParameter(default=os.cpu_count())
 
     def output(self):
         return luigi.LocalTarget((Path(self.output_path) / "_SUCCESS").as_posix())
 
     def write_batch(self, band_names, x, target, item, path):
         # n x k x 128 x 128 tensor
+        if path.exists():
+            return
         x = x.numpy()
         target = target.numpy()
         rows = []
@@ -91,6 +94,7 @@ class TilingTask(luigi.Task):
             batch_size=self.batch_size,
             shuffle=False,
             drop_last=False,
+            num_workers=self.num_workers // 4,
         )
 
         # Write the batch to parquet in many small fragments.
