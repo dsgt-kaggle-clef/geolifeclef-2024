@@ -4,8 +4,6 @@ usage:
     python -m workflows.geotiff_parquet
 """
 
-import gc
-import os
 from multiprocessing import Pool
 from pathlib import Path
 
@@ -48,8 +46,6 @@ class TilingTask(luigi.Task):
         df = pd.DataFrame(rows)
         path.parent.mkdir(parents=True, exist_ok=True)
         df.to_parquet(path, index=False)
-        del df, rows, x, target, item
-        gc.collect()
 
     def mapfn(self, args):
         self.write_batch(*args)
@@ -96,22 +92,11 @@ class TilingTask(luigi.Task):
             shuffle=False,
             drop_last=False,
         )
-        # for i, (x, target, item) in tqdm.tqdm(
-        #     enumerate(dataloader), total=len(dataloader)
-        # ):
-        #     self.write_batch(
-        #         dataset.provider.bands_names,
-        #         x,
-        #         target,
-        #         item,
-        #         Path(self.output_path)
-        #         / f"{i//self.batch_size:04d}"
-        #         / f"{i:06d}.parquet",
-        #     )
 
-        # write the batch to parquet in many small fragments
-        # we put them into subfolders to avoid too many files in a single folder
-        # parallelize writing batches
+        # Write the batch to parquet in many small fragments.
+        # We put them into subfolders to avoid too many files in a single folder
+        # parallelize writing batches. If we use starmap, we find that we run
+        # into a strange memory leak issue.
 
         with Pool(self.num_workers) as p:
             for _ in p.imap(
@@ -137,13 +122,42 @@ class TilingTask(luigi.Task):
             f.write("")
 
 
+class ConsolidateParquet(luigi.Task):
+    input_path = luigi.Parameter()
+    meta_path = luigi.Parameter()
+    intermediate_path = luigi.Parameter()
+    output_path = luigi.Parameter()
+    num_partitions = luigi.IntParameter(default=100)
+
+    def requires(self):
+        return TilingTask(
+            input_path=self.input_path,
+            meta_path=self.meta_path,
+            output_path=self.intermediate_path,
+        )
+
+    def output(self):
+        return luigi.contrib.gcs.GCSFlagTarget(f"{self.output_path}/")
+
+    def run(self):
+        with spark_resource() as spark:
+            df = spark.read.parquet(
+                Path(self.intermediate_path).as_posix() + "/*/*.parquet"
+            )
+            df.printSchema()
+            df.repartition(self.num_partitions).write.parquet(
+                self.output_path, mode="overwrite"
+            )
+
+
 if __name__ == "__main__":
     luigi.build(
         [
-            TilingTask(
+            ConsolidateParquet(
                 input_path="/mnt/data/raw",
                 meta_path="/mnt/data/downloaded",
-                output_path="/mnt/data/intermediate/tiles",
+                intermediate_path="/mnt/data/intermediate/tiles",
+                output_path="gs://dsgt-clef-geolifeclef-2024/data/processed/tiles/v1",
             ),
         ],
         scheduler_host="services.us-central1-a.c.dsgt-clef-2024.internal",
