@@ -165,8 +165,8 @@ class ConsolidateParquet(luigi.Task):
         if self.sync_local:
             # and then sync it back down to the local filesystem
             sync_down = RsyncGCSFiles(
-                src_path=sync_up.dst_path,
-                dst_path=sync_up.src_path,
+                src_path=self.intermediate_remote_path,
+                dst_path=self.intermediate_path,
             )
             yield sync_down
 
