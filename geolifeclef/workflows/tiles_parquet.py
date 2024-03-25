@@ -13,6 +13,7 @@ import luigi.contrib.gcs
 import pandas as pd
 import torch
 import tqdm
+import os
 
 from geolifeclef.loaders.GLC23Datasets import PatchesDataset
 from geolifeclef.loaders.GLC23PatchesProviders import (
@@ -21,17 +22,21 @@ from geolifeclef.loaders.GLC23PatchesProviders import (
     RasterPatchProvider,
 )
 from geolifeclef.utils import spark_resource
+from .utils import RsyncGCSFiles
+import itertools
 
 
 class TilingTask(luigi.Task):
     input_path = luigi.Parameter()
     meta_path = luigi.Parameter()
+    intermediate_path = luigi.Parameter()
     output_path = luigi.Parameter()
+
     batch_size = luigi.IntParameter(default=100)
     num_workers = luigi.IntParameter(default=os.cpu_count())
 
     def output(self):
-        return luigi.LocalTarget((Path(self.output_path) / "_SUCCESS").as_posix())
+        return luigi.contrib.gcs.GCSTarget(f"{self.output_path}/_SUCCESS")
 
     def write_batch(self, band_names, x, target, item, path):
         # n x k x 128 x 128 tensor
@@ -102,6 +107,9 @@ class TilingTask(luigi.Task):
         # parallelize writing batches. If we use starmap, we find that we run
         # into a strange memory leak issue.
 
+        # testing code for limited number of batches
+        # iterable = itertools.islice(enumerate(dataloader),4)
+        iterable = enumerate(dataloader)
         with Pool(self.num_workers) as p:
             for _ in p.imap(
                 self.mapfn,
@@ -111,16 +119,22 @@ class TilingTask(luigi.Task):
                         x,
                         target,
                         item,
-                        Path(self.output_path)
-                        / f"{i//self.batch_size:04d}"
-                        / f"{i:06d}.parquet",
+                        Path(self.intermediate_path)
+                        / f"{i//self.batch_size:08d}"
+                        / f"{i:08d}.parquet",
                     )
                     for i, (x, target, item) in tqdm.tqdm(
-                        enumerate(dataloader), total=len(dataloader)
+                        iterable, total=len(dataloader)
                     )
                 ),
             ):
                 pass
+
+        sync_up = RsyncGCSFiles(
+            src_path=self.intermediate_path,
+            dst_path=self.output_path,
+        )
+        yield sync_up
 
         with self.output().open("w") as f:
             f.write("")
@@ -130,26 +144,41 @@ class ConsolidateParquet(luigi.Task):
     input_path = luigi.Parameter()
     meta_path = luigi.Parameter()
     intermediate_path = luigi.Parameter()
+    intermediate_remote_path = luigi.Parameter()
     output_path = luigi.Parameter()
-    num_partitions = luigi.IntParameter(default=100)
+    num_partitions = luigi.IntParameter(default=400)
+    memory = luigi.Parameter(default="10g")
+    sync_local = luigi.BoolParameter(default=False)
 
     def requires(self):
         return TilingTask(
             input_path=self.input_path,
             meta_path=self.meta_path,
-            output_path=self.intermediate_path,
+            intermediate_path=self.intermediate_path,
+            output_path=self.intermediate_remote_path,
         )
 
     def output(self):
-        return luigi.contrib.gcs.GCSFlagTarget(f"{self.output_path}/")
+        return luigi.contrib.gcs.GCSTarget(f"{self.output_path}/_SUCCESS")
 
     def run(self):
-        with spark_resource() as spark:
-            df = spark.read.parquet(
-                Path(self.intermediate_path).as_posix() + "/*/*.parquet"
+        if self.sync_local:
+            # and then sync it back down to the local filesystem
+            sync_down = RsyncGCSFiles(
+                src_path=self.intermediate_remote_path,
+                dst_path=self.intermediate_path,
             )
+            yield sync_down
+
+        with spark_resource(
+            cores=os.cpu_count(),
+            memory=self.memory,
+            **{"spark.sql.shuffle.partitions": self.num_partitions},
+        ) as spark:
+            df = spark.read.parquet(f"{self.intermediate_remote_path}/*/*.parquet")
             df.printSchema()
-            df.repartition(self.num_partitions).write.parquet(
+            print(f"row count: {df.count()}")
+            df.coalesce(self.num_partitions).write.parquet(
                 self.output_path, mode="overwrite"
             )
 
@@ -161,7 +190,9 @@ if __name__ == "__main__":
                 input_path="/mnt/data/raw",
                 meta_path="/mnt/data/downloaded",
                 intermediate_path="/mnt/data/intermediate/tiles",
-                output_path="gs://dsgt-clef-geolifeclef-2024/data/processed/tiles/v1",
+                intermediate_remote_path="gs://dsgt-clef-geolifeclef-2024/data/intermediate/tiles/v2",
+                output_path="gs://dsgt-clef-geolifeclef-2024/data/processed/tiles/v2",
+                memory="24g",
             ),
         ],
         scheduler_host="services.us-central1-a.c.dsgt-clef-2024.internal",
