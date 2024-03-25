@@ -21,7 +21,7 @@ from geolifeclef.loaders.GLC23PatchesProviders import (
     RasterPatchProvider,
 )
 from geolifeclef.utils import spark_resource
-
+from textwrap import dedent
 
 class TilingTask(luigi.Task):
     input_path = luigi.Parameter()
@@ -95,6 +95,8 @@ class TilingTask(luigi.Task):
             shuffle=False,
             drop_last=False,
             num_workers=self.num_workers // 4,
+            # limit the number of batches for testing
+            num_batches=10
         )
 
         # Write the batch to parquet in many small fragments.
@@ -130,6 +132,7 @@ class ConsolidateParquet(luigi.Task):
     input_path = luigi.Parameter()
     meta_path = luigi.Parameter()
     intermediate_path = luigi.Parameter()
+    intermediate_remote_path = luigi.Parameter()
     output_path = luigi.Parameter()
     num_partitions = luigi.IntParameter(default=100)
 
@@ -144,6 +147,11 @@ class ConsolidateParquet(luigi.Task):
         return luigi.contrib.gcs.GCSFlagTarget(f"{self.output_path}/")
 
     def run(self):
+        # sync the intermediate files to GCS
+        yield RsyncGCSFiles(
+            src_path=self.intermediate_path,
+            dst_path=self.intermediate_remote_path,
+        )
         with spark_resource() as spark:
             df = spark.read.parquet(
                 Path(self.intermediate_path).as_posix() + "/*/*.parquet"
@@ -161,6 +169,7 @@ if __name__ == "__main__":
                 input_path="/mnt/data/raw",
                 meta_path="/mnt/data/downloaded",
                 intermediate_path="/mnt/data/intermediate/tiles",
+                intermediate_remote_path="gs://dsgt-clef-geolifeclef-2024/data/intermediate/tiles/v1",
                 output_path="gs://dsgt-clef-geolifeclef-2024/data/processed/tiles/v1",
             ),
         ],

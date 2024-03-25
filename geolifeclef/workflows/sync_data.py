@@ -9,37 +9,10 @@ from pathlib import Path
 from textwrap import dedent
 
 import luigi
-from luigi.contrib.external_program import ExternalProgramTask
+from .utils import BashScriptTask, RsyncGCSFiles
 
 
-class RsyncGCSFiles(ExternalProgramTask):
-    """Download using the gcloud command-line tool."""
-
-    remote_path = luigi.Parameter()
-    local_path = luigi.Parameter()
-
-    def output(self):
-        return luigi.LocalTarget((Path(self.local_path) / "_SUCCESS").as_posix())
-
-    def program_args(self):
-        """Use gcloud to download the files."""
-        script_text = dedent(
-            f"""
-            #!/bin/bash
-            set -eux -o pipefail
-            gcloud storage rsync -r {self.remote_path} {self.local_path}
-            touch {self.output().path}
-            """
-        ).strip()
-        script_file = tempfile.NamedTemporaryFile(mode="w", delete=False)
-        script_file.write(script_text)
-        script_file.close()
-        print(f"Script file: {script_file.name}")
-        print(script_text)
-        return ["/bin/bash", script_file.name]
-
-
-class UnzipFiles(ExternalProgramTask):
+class UnzipFiles(BashScriptTask):
     """Unzip the files in the data directory."""
 
     input_path = luigi.Parameter()
@@ -50,12 +23,11 @@ class UnzipFiles(ExternalProgramTask):
         return luigi.LocalTarget(
             (Path(self.output_path) / f"_SUCCESS.{stem}").as_posix()
         )
-
-    def program_args(self):
+    
+    def script_text(self) -> str:
         """Use pigz to unzip the files."""
-        # generate a shell script in a temporary file
-        parent = Path(self.output_path)
-        script_text = dedent(
+        parent = Path(self.output().path).parent
+        return dedent(
             f"""
             #!/bin/bash
             set -eux -o pipefail
@@ -63,13 +35,7 @@ class UnzipFiles(ExternalProgramTask):
             unzip -q -o {self.input_path} -d {parent}
             touch {self.output().path}
             """
-        ).strip()
-        script_file = tempfile.NamedTemporaryFile(mode="w", delete=False)
-        script_file.write(script_text)
-        script_file.close()
-        print(f"Script file: {script_file.name}")
-        print(script_text)
-        return ["/bin/bash", script_file.name]
+        )
 
 
 class Workflow(luigi.Task):
@@ -79,8 +45,8 @@ class Workflow(luigi.Task):
 
     def requires(self):
         return RsyncGCSFiles(
-            remote_path=self.input_path,
-            local_path=self.intermediate_path,
+            src_path=self.input_path,
+            dst_path=self.intermediate_path,
         )
 
     def output(self):
