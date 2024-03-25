@@ -22,6 +22,8 @@ from geolifeclef.loaders.GLC23PatchesProviders import (
 )
 from geolifeclef.utils import spark_resource
 from textwrap import dedent
+from .utils import RsyncGCSFiles
+import itertools
 
 class TilingTask(luigi.Task):
     input_path = luigi.Parameter()
@@ -95,8 +97,6 @@ class TilingTask(luigi.Task):
             shuffle=False,
             drop_last=False,
             num_workers=self.num_workers // 4,
-            # limit the number of batches for testing
-            num_batches=10
         )
 
         # Write the batch to parquet in many small fragments.
@@ -104,6 +104,9 @@ class TilingTask(luigi.Task):
         # parallelize writing batches. If we use starmap, we find that we run
         # into a strange memory leak issue.
 
+        # testing code for limited number of batches
+        # iterable = itertools.islice(enumerate(dataloader),4)
+        iterable = enumerate(dataloader)
         with Pool(self.num_workers) as p:
             for _ in p.imap(
                 self.mapfn,
@@ -114,11 +117,10 @@ class TilingTask(luigi.Task):
                         target,
                         item,
                         Path(self.output_path)
-                        / f"{i//self.batch_size:04d}"
-                        / f"{i:06d}.parquet",
+                        / f"{i//self.batch_size:08d}"
+                        / f"{i:08d}.parquet",
                     )
-                    for i, (x, target, item) in tqdm.tqdm(
-                        enumerate(dataloader), total=len(dataloader)
+                    for i, (x, target, item) in tqdm.tqdm(iterable, total=len(dataloader)
                     )
                 ),
             ):
@@ -134,7 +136,7 @@ class ConsolidateParquet(luigi.Task):
     intermediate_path = luigi.Parameter()
     intermediate_remote_path = luigi.Parameter()
     output_path = luigi.Parameter()
-    num_partitions = luigi.IntParameter(default=100)
+    num_partitions = luigi.IntParameter(default=200)
 
     def requires(self):
         return TilingTask(
@@ -144,14 +146,21 @@ class ConsolidateParquet(luigi.Task):
         )
 
     def output(self):
-        return luigi.contrib.gcs.GCSFlagTarget(f"{self.output_path}/")
+        return luigi.contrib.gcs.GCSTarget(f"{self.output_path}/_SUCCESS")
 
     def run(self):
-        # sync the intermediate files to GCS
-        yield RsyncGCSFiles(
+        # sync the intermediate files to GCS in case something goes wrong
+        sync_up = RsyncGCSFiles(
             src_path=self.intermediate_path,
             dst_path=self.intermediate_remote_path,
         )
+        yield sync_up
+        # and then sync it back down to the local filesystem
+        sync_down = RsyncGCSFiles(
+            src_path=sync_up.dst_path,
+            dst_path=sync_up.src_path,
+        )
+        yield sync_down
         with spark_resource() as spark:
             df = spark.read.parquet(
                 Path(self.intermediate_path).as_posix() + "/*/*.parquet"
@@ -169,8 +178,8 @@ if __name__ == "__main__":
                 input_path="/mnt/data/raw",
                 meta_path="/mnt/data/downloaded",
                 intermediate_path="/mnt/data/intermediate/tiles",
-                intermediate_remote_path="gs://dsgt-clef-geolifeclef-2024/data/intermediate/tiles/v1",
-                output_path="gs://dsgt-clef-geolifeclef-2024/data/processed/tiles/v1",
+                intermediate_remote_path="gs://dsgt-clef-geolifeclef-2024/data/intermediate/tiles/v2",
+                output_path="gs://dsgt-clef-geolifeclef-2024/data/processed/tiles/v2",
             ),
         ],
         scheduler_host="services.us-central1-a.c.dsgt-clef-2024.internal",

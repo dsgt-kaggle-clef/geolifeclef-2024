@@ -33,8 +33,8 @@ class RsyncGCSFiles(BashScriptTask):
     dst_path = luigi.Parameter()
 
     def output(self):
-        path = (Path(self.dst_path) / "_SUCCESS").as_posix()
-        if self.dst_path.startswith("gs://"):
+        path = f"{self.dst_path}/_SUCCESS"
+        if path.startswith("gs://"):
             return luigi.contrib.gcs.GCSTarget(path)
         else:
             return luigi.LocalTarget(path)
