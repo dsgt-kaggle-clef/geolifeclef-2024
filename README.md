@@ -29,9 +29,3 @@ Then install the current package into your local user directory, so changes that
 ```bash
 pip install -e .
 ```
-
-### other dependencies
-
-```bash
-sudo apt install libgdal-dev
-```
