@@ -4,7 +4,6 @@ This script prepares analysis for using the spatial rasters using the included d
 """
 
 import os
-import tempfile
 from pathlib import Path
 from textwrap import dedent
 
@@ -23,7 +22,7 @@ class UnzipFiles(BashScriptTask):
         return luigi.LocalTarget(
             (Path(self.output_path) / f"_SUCCESS.{stem}").as_posix()
         )
-    
+
     def script_text(self) -> str:
         """Use pigz to unzip the files."""
         parent = Path(self.output().path).parent
@@ -38,7 +37,7 @@ class UnzipFiles(BashScriptTask):
         )
 
 
-class Workflow(luigi.Task):
+class SyncDownloadedDataWorkflow(luigi.Task):
     input_path = luigi.Parameter()
     intermediate_path = luigi.Parameter()
     output_path = luigi.Parameter()
@@ -74,7 +73,7 @@ class Workflow(luigi.Task):
 if __name__ == "__main__":
     luigi.build(
         [
-            Workflow(
+            SyncDownloadedDataWorkflow(
                 input_path="gs://dsgt-clef-geolifeclef-2024/data/downloaded/2024",
                 intermediate_path="/mnt/data/downloaded/",
                 output_path="/mnt/data/raw",

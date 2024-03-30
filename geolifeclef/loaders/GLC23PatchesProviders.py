@@ -123,9 +123,8 @@ class RasterPatchProvider(PatchProvider):
         with rasterio.open(raster_path) as src:
             # read the metadata of the file
             meta = src.meta
-            meta.update(
-                count=src.count
-            )  # update the count of the meta to match the number of layers
+            # update the count of the meta to match the number of layers
+            meta.update(count=src.count)
 
             # read the data from the raster
             self.data = src.read()

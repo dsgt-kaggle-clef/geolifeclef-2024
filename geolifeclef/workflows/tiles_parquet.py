@@ -35,7 +35,7 @@ class BaseTilingTask(luigi.Task):
     output_path = luigi.Parameter()
 
     batch_size = luigi.IntParameter(default=1000)
-    num_workers = luigi.IntParameter(default=os.cpu_count())
+    num_workers = luigi.IntParameter(default=2)
     test_mode = luigi.BoolParameter(default=False)
 
     def output(self):
@@ -80,7 +80,7 @@ class BaseTilingTask(luigi.Task):
             batch_size=self.batch_size,
             shuffle=False,
             drop_last=False,
-            num_workers=(self.num_workers // 4) if self.num_workers > 1 else 1,
+            num_workers=(self.num_workers // 2) if self.num_workers > 1 else 1,
         )
 
         # Write the batch to parquet in many small fragments.
@@ -186,9 +186,9 @@ class ConsolidateParquet(luigi.Task):
             yield sync_down
 
         with spark_resource(
-            **{"spark.sql.shuffle.partitions": self.num_partitions}
+            **{"spark.sql.shuffle.partitions": self.num_partitions},
         ) as spark:
-            df = spark.read.parquet(f"{self.intermediate_remote_path}/*.parquet")
+            df = spark.read.parquet(f"{self.intermediate_remote_path}/*/*.parquet")
             df.printSchema()
             print(f"row count: {df.count()}")
             df.coalesce(self.num_partitions).write.parquet(
@@ -208,10 +208,17 @@ if __name__ == "__main__":
     version = "v3"
     raw_root = Path("/mnt/data")
     raster_tifs = Path("/mnt/data/raw/EnvironmentalRasters").glob("**/*.tif")
-    # remove that has MACOSX in the name
-    raster_tifs = [p for p in raster_tifs if "__MACOSX" not in p.as_posix()]
-    # also ignore climatic monthly
-    raster_tifs = [p for p in raster_tifs if "Climatic_Monthly" not in p.as_posix()]
+
+    raster_tifs = [
+        p
+        for p in raster_tifs
+        # too many climatic rasters
+        if ("Climatic_Monthly" not in p.as_posix())
+        # leftover macos files
+        and ("__MACOSX" not in p.as_posix())
+        # nothing larger than 1gb
+        and p.stat().st_size < 1e9
+    ]
     luigi.build(
         [
             ConsolidateParquet(
@@ -239,5 +246,5 @@ if __name__ == "__main__":
             )
         ],
         scheduler_host="services.us-central1-a.c.dsgt-clef-2024.internal",
-        workers=1,
+        workers=4,
     )
