@@ -4,36 +4,39 @@ usage:
     python -m geolifeclef.workflows.tiles_parquet
 """
 
+import itertools
 import os
+from argparse import ArgumentParser
 from multiprocessing import Pool
 from pathlib import Path
+import shutil
 
 import luigi
 import luigi.contrib.gcs
 import pandas as pd
 import torch
 import tqdm
-import os
 from scipy.fftpack import dctn
 
 from geolifeclef.loaders.GLC23Datasets import PatchesDataset
 from geolifeclef.loaders.GLC23PatchesProviders import (
     JpegPatchProvider,
-    MultipleRasterPatchProvider,
+    RasterPatchProvider,
 )
 from geolifeclef.utils import spark_resource
+
 from .utils import RsyncGCSFiles
-import itertools
 
 
-class TilingTask(luigi.Task):
+class BaseTilingTask(luigi.Task):
     input_path = luigi.Parameter()
-    meta_path = luigi.Parameter()
+    occurrences_path = luigi.Parameter()
     intermediate_path = luigi.Parameter()
     output_path = luigi.Parameter()
 
-    batch_size = luigi.IntParameter(default=100)
-    num_workers = luigi.IntParameter(default=os.cpu_count() // 2)
+    batch_size = luigi.IntParameter(default=1000)
+    num_workers = luigi.IntParameter(default=os.cpu_count())
+    test_mode = luigi.BoolParameter(default=False)
 
     def output(self):
         return luigi.contrib.gcs.GCSTarget(f"{self.output_path}/_SUCCESS")
@@ -66,58 +69,11 @@ class TilingTask(luigi.Task):
     def mapfn(self, args):
         self.write_batch(*args)
 
-    def run(self):
-        input_path = Path(self.input_path)
-        meta_path = Path(self.meta_path)
-        # 19 bioclimatic rasters
-        p_bioclim = MultipleRasterPatchProvider(
-            (
-                input_path
-                / "EnvironmentalRasters/Climate/BioClimatic_Average_1981-2010"
-            ).as_posix(),
-        )
-        # ignore climatic monthly for now because there are way too many of them
-        # 1 elevation
-        p_elevation = MultipleRasterPatchProvider(
-            (input_path / "EnvironmentalRasters/Elevation").as_posix()
-        )
-        # human footprint detailed (14 rasters)
-        p_hfp_d = MultipleRasterPatchProvider(
-            (input_path / "EnvironmentalRasters/HumanFootprint/detailed").as_posix()
-        )
-        # human footprint summarized (2 rasters)
-        p_hfp_s = MultipleRasterPatchProvider(
-            (input_path / "EnvironmentalRasters/HumanFootprint/summarized").as_posix()
-        )
-        # 1 raster
-        p_landcover = MultipleRasterPatchProvider(
-            (input_path / "EnvironmentalRasters/LandCover").as_posix()
-        )
-        # 9 rasters
-        p_soilgrids = MultipleRasterPatchProvider(
-            (input_path / "EnvironmentalRasters/SoilGrids").as_posix()
-        )
-        # take all sentinel imagery layers (r,g,b,nir = 4 layers)
-        p_rgb = JpegPatchProvider(
-            (input_path / "SatellitePatches/").as_posix(),
-            # very inefficient normalization in the data loading library
-            normalize=False,
-        )
+    def load_dataset(self):
+        raise NotImplementedError()
 
-        dataset = PatchesDataset(
-            occurrences=(
-                meta_path / "PresenceOnlyOccurrences/GLC24-PO-metadata-train.csv"
-            ).as_posix(),
-            providers=[
-                p_bioclim,
-                p_elevation,
-                p_hfp_d,
-                p_hfp_s,
-                p_landcover,
-                p_soilgrids,
-                p_rgb,
-            ],
-        )
+    def run(self):
+        dataset = self.load_dataset()
 
         dataloader = torch.utils.data.DataLoader(
             dataset,
@@ -133,8 +89,10 @@ class TilingTask(luigi.Task):
         # into a strange memory leak issue.
 
         # testing code for limited number of batches
-        # iterable = itertools.islice(enumerate(dataloader),4)
-        iterable = enumerate(dataloader)
+        if self.test_mode:
+            iterable = itertools.islice(enumerate(dataloader), 4)
+        else:
+            iterable = enumerate(dataloader)
         with Pool(self.num_workers) as p:
             for _ in p.imap(
                 self.mapfn,
@@ -161,25 +119,58 @@ class TilingTask(luigi.Task):
         )
         yield sync_up
 
+        # delete the intermediate files
+        shutil.rmtree(self.intermediate_path)
+
         with self.output().open("w") as f:
             f.write("")
 
 
+class RasterTilingTask(BaseTilingTask):
+    def load_dataset(self):
+        return PatchesDataset(
+            occurrences=self.occurrences_path,
+            providers=[RasterPatchProvider(self.input_path)],
+        )
+
+
+class JpegTilingTask(BaseTilingTask):
+    def load_dataset(self):
+        return PatchesDataset(
+            occurrences=self.occurrences_path,
+            providers=[
+                JpegPatchProvider(
+                    self.input_path,
+                    normalize=False,
+                )
+            ],
+        )
+
+
 class ConsolidateParquet(luigi.Task):
     input_path = luigi.Parameter()
-    meta_path = luigi.Parameter()
+    input_type = luigi.ChoiceParameter(choices=["raster", "jpeg"])
+    occurrences_path = luigi.Parameter()
     intermediate_path = luigi.Parameter()
     intermediate_remote_path = luigi.Parameter()
     output_path = luigi.Parameter()
     num_partitions = luigi.IntParameter(default=400)
     sync_local = luigi.BoolParameter(default=False)
+    test_mode = luigi.BoolParameter(default=False)
+
+    resources = {"max_workers": 1}
 
     def requires(self):
-        return TilingTask(
+        tiling_task = {
+            "raster": RasterTilingTask,
+            "jpeg": JpegTilingTask,
+        }[self.input_type]
+        return tiling_task(
             input_path=self.input_path,
-            meta_path=self.meta_path,
+            occurrences_path=self.occurrences_path,
             intermediate_path=self.intermediate_path,
             output_path=self.intermediate_remote_path,
+            test_mode=self.test_mode,
         )
 
     def output(self):
@@ -197,7 +188,7 @@ class ConsolidateParquet(luigi.Task):
         with spark_resource(
             **{"spark.sql.shuffle.partitions": self.num_partitions}
         ) as spark:
-            df = spark.read.parquet(f"{self.intermediate_remote_path}/*/*.parquet")
+            df = spark.read.parquet(f"{self.intermediate_remote_path}/*.parquet")
             df.printSchema()
             print(f"row count: {df.count()}")
             df.coalesce(self.num_partitions).write.parquet(
@@ -205,16 +196,47 @@ class ConsolidateParquet(luigi.Task):
             )
 
 
+def parse_args():
+    parser = ArgumentParser()
+    parser.add_argument("--test-mode", action="store_true")
+    return parser.parse_args()
+
+
 if __name__ == "__main__":
+    args = parse_args()
+    name = "tiles" if not args.test_mode else "tiles_test"
+    version = "v3"
+    raw_root = Path("/mnt/data")
+    raster_tifs = Path("/mnt/data/raw/EnvironmentalRasters").glob("**/*.tif")
+    # remove that has MACOSX in the name
+    raster_tifs = [p for p in raster_tifs if "__MACOSX" not in p.as_posix()]
+    # also ignore climatic monthly
+    raster_tifs = [p for p in raster_tifs if "Climatic_Monthly" not in p.as_posix()]
     luigi.build(
         [
             ConsolidateParquet(
-                input_path="/mnt/data/raw",
-                meta_path="/mnt/data/downloaded",
-                intermediate_path="/mnt/data/intermediate/tiles",
-                intermediate_remote_path="gs://dsgt-clef-geolifeclef-2024/data/intermediate/tiles/v3",
-                output_path="gs://dsgt-clef-geolifeclef-2024/data/processed/tiles/v3",
-            ),
+                input_path=p.as_posix(),
+                input_type="raster",
+                occurrences_path="/mnt/data/downloaded/PresenceOnlyOccurrences/GLC24-PO-metadata-train.csv",
+                intermediate_path=f"/mnt/data/intermediate/{name}/po/{p.parts[-2]}/{p.stem}/{version}",
+                intermediate_remote_path=f"gs://dsgt-clef-geolifeclef-2024/data/intermediate/{name}/po/{p.parts[-2]}/{p.stem}/{version}",
+                output_path=f"gs://dsgt-clef-geolifeclef-2024/data/processed/{name}/po/{p.parts[-2]}/{p.stem}/{version}",
+                num_partitions=200 if not args.test_mode else 4,
+                test_mode=args.test_mode,
+            )
+            for p in raster_tifs
+        ]
+        + [
+            ConsolidateParquet(
+                input_path="/mnt/data/raw/SatellitePatches",
+                input_type="jpeg",
+                occurrences_path="/mnt/data/downloaded/PresenceOnlyOccurrences/GLC24-PO-metadata-train.csv",
+                intermediate_path=f"/mnt/data/intermediate/{name}/po/satellite/{version}",
+                intermediate_remote_path=f"gs://dsgt-clef-geolifeclef-2024/data/intermediate/{name}/po/satellite/{version}",
+                output_path=f"gs://dsgt-clef-geolifeclef-2024/data/processed/{name}/po/satellite/{version}",
+                num_partitions=400 if not args.test_mode else 4,
+                test_mode=args.test_mode,
+            )
         ],
         scheduler_host="services.us-central1-a.c.dsgt-clef-2024.internal",
         workers=1,
