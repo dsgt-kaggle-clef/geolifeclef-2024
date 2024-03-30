@@ -1,7 +1,7 @@
 """Convert tif files into parquet files that contain tiles of the original image.
 
 usage:
-    python -m workflows.geotiff_parquet
+    python -m geolifeclef.workflows.tiles_parquet
 """
 
 import os
@@ -14,12 +14,12 @@ import pandas as pd
 import torch
 import tqdm
 import os
+from scipy.fftpack import dctn
 
 from geolifeclef.loaders.GLC23Datasets import PatchesDataset
 from geolifeclef.loaders.GLC23PatchesProviders import (
     JpegPatchProvider,
     MultipleRasterPatchProvider,
-    RasterPatchProvider,
 )
 from geolifeclef.utils import spark_resource
 from .utils import RsyncGCSFiles
@@ -33,10 +33,15 @@ class TilingTask(luigi.Task):
     output_path = luigi.Parameter()
 
     batch_size = luigi.IntParameter(default=100)
-    num_workers = luigi.IntParameter(default=os.cpu_count())
+    num_workers = luigi.IntParameter(default=os.cpu_count() // 2)
 
     def output(self):
         return luigi.contrib.gcs.GCSTarget(f"{self.output_path}/_SUCCESS")
+
+    def dctn_filter(self, tile, k=8):
+        coeff = dctn(tile)
+        coeff_subset = coeff[:k, :k]
+        return coeff_subset.flatten()
 
     def write_batch(self, band_names, x, target, item, path):
         # n x k x 128 x 128 tensor
@@ -47,7 +52,10 @@ class TilingTask(luigi.Task):
         rows = []
         for i in range(x.shape[0]):
             zipped = list(zip(band_names, x[i]))
-            row = {k: v.reshape(-1).astype(float).tolist() for k, v in zipped}
+            row = {
+                k: self.dctn_filter(v).reshape(-1).astype(float).tolist()
+                for k, v in zipped
+            }
             row.update({k: v[i].item() for k, v in item.items()})
             row.update({"target": int(target[i])})
             rows.append(row)
@@ -61,20 +69,33 @@ class TilingTask(luigi.Task):
     def run(self):
         input_path = Path(self.input_path)
         meta_path = Path(self.meta_path)
-        # take only bio1 and bio2 from bioclimatic rasters (2 rasters from the 3 in the folder)
+        # 19 bioclimatic rasters
         p_bioclim = MultipleRasterPatchProvider(
             (
                 input_path
                 / "EnvironmentalRasters/Climate/BioClimatic_Average_1981-2010"
             ).as_posix(),
-            select=["bio1", "bio2"],
         )
-        # take the human footprint 2009 summarized raster (a single raster)
-        p_hfp_s = RasterPatchProvider(
-            (
-                input_path
-                / "EnvironmentalRasters/HumanFootprint/summarized/HFP2009_WGS84.tif"
-            ).as_posix()
+        # ignore climatic monthly for now because there are way too many of them
+        # 1 elevation
+        p_elevation = MultipleRasterPatchProvider(
+            (input_path / "EnvironmentalRasters/Elevation").as_posix()
+        )
+        # human footprint detailed (14 rasters)
+        p_hfp_d = MultipleRasterPatchProvider(
+            (input_path / "EnvironmentalRasters/HumanFootprint/detailed").as_posix()
+        )
+        # human footprint summarized (2 rasters)
+        p_hfp_s = MultipleRasterPatchProvider(
+            (input_path / "EnvironmentalRasters/HumanFootprint/summarized").as_posix()
+        )
+        # 1 raster
+        p_landcover = MultipleRasterPatchProvider(
+            (input_path / "EnvironmentalRasters/LandCover").as_posix()
+        )
+        # 9 rasters
+        p_soilgrids = MultipleRasterPatchProvider(
+            (input_path / "EnvironmentalRasters/SoilGrids").as_posix()
         )
         # take all sentinel imagery layers (r,g,b,nir = 4 layers)
         p_rgb = JpegPatchProvider(
@@ -89,7 +110,11 @@ class TilingTask(luigi.Task):
             ).as_posix(),
             providers=[
                 p_bioclim,
+                p_elevation,
+                p_hfp_d,
                 p_hfp_s,
+                p_landcover,
+                p_soilgrids,
                 p_rgb,
             ],
         )
@@ -99,7 +124,7 @@ class TilingTask(luigi.Task):
             batch_size=self.batch_size,
             shuffle=False,
             drop_last=False,
-            num_workers=self.num_workers // 4,
+            num_workers=(self.num_workers // 4) if self.num_workers > 1 else 1,
         )
 
         # Write the batch to parquet in many small fragments.
@@ -147,7 +172,6 @@ class ConsolidateParquet(luigi.Task):
     intermediate_remote_path = luigi.Parameter()
     output_path = luigi.Parameter()
     num_partitions = luigi.IntParameter(default=400)
-    memory = luigi.Parameter(default="10g")
     sync_local = luigi.BoolParameter(default=False)
 
     def requires(self):
@@ -171,9 +195,7 @@ class ConsolidateParquet(luigi.Task):
             yield sync_down
 
         with spark_resource(
-            cores=os.cpu_count(),
-            memory=self.memory,
-            **{"spark.sql.shuffle.partitions": self.num_partitions},
+            **{"spark.sql.shuffle.partitions": self.num_partitions}
         ) as spark:
             df = spark.read.parquet(f"{self.intermediate_remote_path}/*/*.parquet")
             df.printSchema()
@@ -190,9 +212,8 @@ if __name__ == "__main__":
                 input_path="/mnt/data/raw",
                 meta_path="/mnt/data/downloaded",
                 intermediate_path="/mnt/data/intermediate/tiles",
-                intermediate_remote_path="gs://dsgt-clef-geolifeclef-2024/data/intermediate/tiles/v2",
-                output_path="gs://dsgt-clef-geolifeclef-2024/data/processed/tiles/v2",
-                memory="24g",
+                intermediate_remote_path="gs://dsgt-clef-geolifeclef-2024/data/intermediate/tiles/v3",
+                output_path="gs://dsgt-clef-geolifeclef-2024/data/processed/tiles/v3",
             ),
         ],
         scheduler_host="services.us-central1-a.c.dsgt-clef-2024.internal",
