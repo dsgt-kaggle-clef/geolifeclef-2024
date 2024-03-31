@@ -51,7 +51,11 @@ class BaseTilingTask(luigi.Task):
         if path.exists():
             return
         x = x.numpy()
-        target = target.numpy()
+        try:
+            target = target.numpy()
+        except:
+            target = None
+
         rows = []
         for i in range(x.shape[0]):
             zipped = list(zip(band_names, x[i]))
@@ -60,7 +64,8 @@ class BaseTilingTask(luigi.Task):
                 for k, v in zipped
             }
             row.update({k: v[i].item() for k, v in item.items()})
-            row.update({"target": int(target[i])})
+            if target is not None:
+                row.update({"target": int(target[i])})
             rows.append(row)
         df = pd.DataFrame(rows)
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -219,32 +224,42 @@ if __name__ == "__main__":
         # nothing larger than 1gb
         and p.stat().st_size < 1e9
     ]
+
+    tasks = []
+    for prefix, occurrences in [
+        ("po", "PresenceOnlyOccurrences/GLC24-PO-metadata-train.csv"),
+        ("pa-test", "PresenceAbsenceSurveys/GLC24-PA-metadata-test.csv"),
+        ("pa-train", "PresenceAbsenceSurveys/GLC24-PA-metadata-train.csv"),
+    ]:
+        tasks.extend(
+            [
+                ConsolidateParquet(
+                    input_path=p.as_posix(),
+                    input_type="raster",
+                    occurrences_path=f"/mnt/data/downloaded/{occurrences}",
+                    intermediate_path=f"/mnt/data/intermediate/{name}/{prefix}/{p.parts[-2]}/{p.stem}/{version}",
+                    intermediate_remote_path=f"gs://dsgt-clef-geolifeclef-2024/data/intermediate/{name}/{prefix}/{p.parts[-2]}/{p.stem}/{version}",
+                    output_path=f"gs://dsgt-clef-geolifeclef-2024/data/processed/{name}/{prefix}/{p.parts[-2]}/{p.stem}/{version}",
+                    num_partitions=200 if not args.test_mode else 4,
+                    test_mode=args.test_mode,
+                )
+                for p in raster_tifs
+            ]
+            + [
+                ConsolidateParquet(
+                    input_path="/mnt/data/raw/SatellitePatches",
+                    input_type="jpeg",
+                    occurrences_path=f"/mnt/data/downloaded/{occurrences}",
+                    intermediate_path=f"/mnt/data/intermediate/{name}/{prefix}/satellite/{version}",
+                    intermediate_remote_path=f"gs://dsgt-clef-geolifeclef-2024/data/intermediate/{name}/{prefix}/satellite/{version}",
+                    output_path=f"gs://dsgt-clef-geolifeclef-2024/data/processed/{name}/{prefix}/satellite/{version}",
+                    num_partitions=400 if not args.test_mode else 4,
+                    test_mode=args.test_mode,
+                )
+            ]
+        )
     luigi.build(
-        [
-            ConsolidateParquet(
-                input_path=p.as_posix(),
-                input_type="raster",
-                occurrences_path="/mnt/data/downloaded/PresenceOnlyOccurrences/GLC24-PO-metadata-train.csv",
-                intermediate_path=f"/mnt/data/intermediate/{name}/po/{p.parts[-2]}/{p.stem}/{version}",
-                intermediate_remote_path=f"gs://dsgt-clef-geolifeclef-2024/data/intermediate/{name}/po/{p.parts[-2]}/{p.stem}/{version}",
-                output_path=f"gs://dsgt-clef-geolifeclef-2024/data/processed/{name}/po/{p.parts[-2]}/{p.stem}/{version}",
-                num_partitions=200 if not args.test_mode else 4,
-                test_mode=args.test_mode,
-            )
-            for p in raster_tifs
-        ]
-        + [
-            ConsolidateParquet(
-                input_path="/mnt/data/raw/SatellitePatches",
-                input_type="jpeg",
-                occurrences_path="/mnt/data/downloaded/PresenceOnlyOccurrences/GLC24-PO-metadata-train.csv",
-                intermediate_path=f"/mnt/data/intermediate/{name}/po/satellite/{version}",
-                intermediate_remote_path=f"gs://dsgt-clef-geolifeclef-2024/data/intermediate/{name}/po/satellite/{version}",
-                output_path=f"gs://dsgt-clef-geolifeclef-2024/data/processed/{name}/po/satellite/{version}",
-                num_partitions=400 if not args.test_mode else 4,
-                test_mode=args.test_mode,
-            )
-        ],
+        tasks,
         scheduler_host="services.us-central1-a.c.dsgt-clef-2024.internal",
         workers=4,
     )

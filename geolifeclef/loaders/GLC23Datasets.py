@@ -37,7 +37,7 @@ class PatchesDataset(Dataset):
 
         self.observation_ids = df[id_name].values
         self.items = df[item_columns]
-        self.targets = df[label_name].values
+        self.targets = df[label_name].values if label_name in df.columns else None
 
     def __len__(self):
         return len(self.observation_ids)
@@ -47,7 +47,7 @@ class PatchesDataset(Dataset):
 
         patch = self.provider[item]
 
-        target = self.targets[index]
+        target = self.targets[index] if self.targets is not None else []
 
         if self.target_transform:
             target = self.target_transform(target)
@@ -83,17 +83,19 @@ class PatchesDatasetMultiLabel(PatchesDataset):
     def __getitem__(self, index):
         item = self.items.iloc[index].to_dict()
         patchid_rows_i = self.items[self.items["patchID"] == item["patchID"]].index
-        self.targets_sorted = np.sort(self.targets)
-
         patch = self.provider[item]
 
-        targets = np.zeros(len(self.targets))
-        for idx in patchid_rows_i:
-            target = self.targets[idx]
-            if self.target_transform:
-                target = self.target_transform(target)
-            targets[np.where(self.targets_sorted == target)] = 1
-        targets = torch.from_numpy(targets)
+        if self.targets is not None:
+            self.targets_sorted = np.sort(self.targets)
+            targets = np.zeros(len(self.targets))
+            for idx in patchid_rows_i:
+                target = self.targets[idx]
+                if self.target_transform:
+                    target = self.target_transform(target)
+                targets[np.where(self.targets_sorted == target)] = 1
+            targets = torch.from_numpy(targets)
+        else:
+            targets = []
 
         return torch.from_numpy(patch).float(), targets
 
