@@ -1,8 +1,18 @@
-from luigi.contrib.external_program import ExternalProgramTask
 import tempfile
-from textwrap import dedent
-import luigi.contrib.gcs
 from pathlib import Path
+from textwrap import dedent
+
+import luigi.contrib.gcs
+from luigi.contrib.external_program import ExternalProgramTask
+
+
+def maybe_gcs_target(path: str) -> luigi.Target:
+    """Return a GCS target if the path starts with gs://, otherwise a LocalTarget."""
+    if path.startswith("gs://"):
+        return luigi.contrib.gcs.GCSTarget(path)
+    else:
+        return luigi.LocalTarget(path)
+
 
 class BashScriptTask(ExternalProgramTask):
     def script_text(self) -> str:
@@ -47,7 +57,7 @@ class RsyncGCSFiles(BashScriptTask):
             gcloud storage rsync -r {self.src_path} {self.dst_path}
             """
         )
-    
+
     def run(self):
         super().run()
         with self.output().open("w") as f:
