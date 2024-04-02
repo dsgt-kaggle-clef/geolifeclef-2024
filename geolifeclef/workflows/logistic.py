@@ -119,6 +119,70 @@ class GeoLSH(luigi.Task):
             f.write("")
 
 
+class LSHSimilarityTest(luigi.Task):
+    input_path = luigi.Parameter()
+    output_path = luigi.Parameter()
+
+    def output(self):
+        return maybe_gcs_target(f"{self.output_path}/_SUCCESS")
+
+    def run(self):
+        with spark_resource() as spark:
+            model = PipelineModel.load(f"{self.input_path}/model")
+            data = spark.read.parquet(f"{self.input_path}/data")
+
+            # now for different values of the threshold, we see the average number of neighbors
+            # the euclidean distance is measured in meters, so let's choose reasonable values based
+            # on the size of europe
+            for threshold in [
+                10,
+                50,
+                100,
+                500,
+                1_000,
+                5_000,
+                10_000,
+                50_000,
+                100_000,
+                500_000,
+            ]:
+                (
+                    model.stages[-1]
+                    .approxSimilarityJoin(
+                        data,
+                        data,
+                        threshold,
+                        distCol="euclidean",
+                    )
+                    .groupBy(
+                        F.col("datasetA.speciesId").alias("src"),
+                        F.col("datasetB.speciesId").alias("dst"),
+                    )
+                    .agg(F.count("*").alias("count"))
+                    .write.parquet(
+                        f"{self.output_path}/edges/threshold={threshold}",
+                        mode="overwrite",
+                    )
+                )
+                (
+                    spark.read.parquet(
+                        f"{self.output_path}/edges/threshold={threshold}"
+                    )
+                    .describe()
+                    .repartition(1)
+                    .write.parquet(
+                        f"{self.output_path}/stats/threshold={threshold}",
+                        mode="overwrite",
+                    )
+                )
+                spark.read.parquet(
+                    f"{self.output_path}/stats/threshold={threshold}"
+                ).show()
+
+        with self.output().open("w") as f:
+            f.write("")
+
+
 class LogisticWorkflow(luigi.Task):
     def run(self):
         data_root = "gs://dsgt-clef-geolifeclef-2024/data"
@@ -129,6 +193,10 @@ class LogisticWorkflow(luigi.Task):
         yield GeoLSH(
             input_path=f"{data_root}/processed/metadata_clean/v1",
             output_path=f"{data_root}/processed/geolsh/v1",
+        )
+        yield LSHSimilarityTest(
+            input_path=f"{data_root}/processed/geolsh/v1",
+            output_path=f"{data_root}/processed/geolsh_graph/v1",
         )
 
 
