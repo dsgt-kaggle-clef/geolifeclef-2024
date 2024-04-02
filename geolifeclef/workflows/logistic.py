@@ -93,23 +93,6 @@ class FitLogisticModel(luigi.Task):
     def _load(self, spark):
         return spark.read.parquet(self.input_path).where(F.col(self.label).isNotNull())
 
-    def _train_test_split(self, df, train_size=0.8):
-        # use the surveyId to split the data
-        sample_id = df.withColumn(
-            "sample_id", F.crc32(F.col("surveyId").cast("string")) % 100
-        )
-        train = (
-            sample_id.where(F.col("sample_id") < train_size * 100)
-            .drop("sample_id")
-            .cache()
-        )
-        test = (
-            sample_id.where(F.col("sample_id") >= train_size * 100)
-            .drop("sample_id")
-            .cache()
-        )
-        return train, test
-
     def _pipeline(self):
         return Pipeline(
             stages=[
@@ -144,20 +127,17 @@ class FitLogisticModel(luigi.Task):
             .build()
         )
 
-    def _calculate_multilabel_stats(self, train, test):
+    def _calculate_multilabel_stats(self, train):
         """Calculate statistics about the number of rows with multiple labels"""
 
         train.groupBy("surveyId").count().describe().write.csv(
             f"{self.output_path}/multilabel_stats/dataset=train", mode="overwrite"
         )
-        test.groupBy("surveyId").count().describe().write.csv(
-            f"{self.output_path}/multilabel_stats/dataset=test", mode="overwrite"
-        )
 
     def run(self):
         with spark_resource() as spark:
-            train, test = self._train_test_split(self._load(spark), train_size=0.8)
-            self._calculate_multilabel_stats(train, test)
+            train = self._load(spark)
+            self._calculate_multilabel_stats(train)
 
             # write the model to disk
             pipeline = self._pipeline()
@@ -177,21 +157,13 @@ class FitLogisticModel(luigi.Task):
                 model = cv.fit(train)
                 model.write().overwrite().save(f"{self.output_path}/model")
 
-            # evaluate on test set
-            with Timer() as eval_timer:
-                model = CrossValidatorModel.load(f"{self.output_path}/model")
-                predictions = model.transform(test)
-                score = model.getEvaluator().evaluate(predictions)
-
             # write the results to disk
             perf = spark.createDataFrame(
                 [
                     {
                         "train_time": train_timer.elapsed,
-                        "eval_time": eval_timer.elapsed,
                         "avg_metrics": model.avgMetrics,
                         "std_metrics": model.avgMetrics,
-                        "test_metric": score,
                         "metric_name": model.getEvaluator().getMetricName(),
                     }
                 ]
@@ -240,14 +212,17 @@ class LogisticWorkflow(luigi.Task):
             output_path=f"{data_root}/processed/metadata_clean/v1",
         )
 
+        # v1 - multi-class w/ test-train split and cv
+        # v2 - conversion to multilabel
+        # v3 - drop custom test-train split and rely on cv
         yield FitSubsetLogisticModel(
             input_path=f"{data_root}/processed/metadata_clean/v1",
-            output_path=f"{data_root}/models/subset_logistic/v2",
+            output_path=f"{data_root}/models/subset_logistic/v3",
         )
 
         yield FitLogisticModel(
             input_path=f"{data_root}/processed/metadata_clean/v1",
-            output_path=f"{data_root}/models/logistic/v2",
+            output_path=f"{data_root}/models/logistic/v3",
         )
 
 
