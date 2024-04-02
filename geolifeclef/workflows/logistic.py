@@ -1,6 +1,8 @@
 from functools import reduce
 
 import luigi
+from pyspark.ml import Pipeline, PipelineModel
+from pyspark.ml.feature import BucketedRandomProjectionLSH, VectorAssembler
 from pyspark.sql import functions as F
 
 from geolifeclef.functions import get_projection_udf
@@ -67,13 +69,73 @@ class CleanMetadata(luigi.Task):
             )
 
 
+class GeoLSH(luigi.Task):
+    """Find the nearest neighbor of each survey in the metadata."""
+
+    input_path = luigi.Parameter()
+    output_path = luigi.Parameter()
+
+    def output(self):
+        return maybe_gcs_target(f"{self.output_path}/_SUCCESS")
+
+    def _load(self, spark):
+        return (
+            spark.read.parquet(self.input_path)
+            .where(F.col("speciesId").isNotNull())
+            .repartition(32)
+        ).cache()
+
+    def _pipeline(self):
+        return Pipeline(
+            stages=[
+                VectorAssembler(
+                    inputCols=["lat_proj", "lon_proj"], outputCol="features"
+                ),
+                BucketedRandomProjectionLSH(
+                    inputCol="features",
+                    outputCol="hashes",
+                    bucketLength=20,
+                    numHashTables=5,
+                ),
+            ]
+        )
+
+    def run(self):
+        with spark_resource() as spark:
+            train = self._load(spark)
+
+            # write the model to disk
+            model = self._pipeline().fit(train)
+            model.write().overwrite().save(f"{self.output_path}/model")
+            model = PipelineModel.load(f"{self.output_path}/model")
+
+            # transform the data and write it to disk
+            model.transform(train).write.parquet(
+                f"{self.output_path}/data", mode="overwrite"
+            )
+
+        # write the output
+        with self.output().open("w") as f:
+            f.write("")
+
+
+class LogisticWorkflow(luigi.Task):
+    def run(self):
+        data_root = "gs://dsgt-clef-geolifeclef-2024/data"
+        yield CleanMetadata(
+            input_path=f"{data_root}/downloaded/2024",
+            output_path=f"{data_root}/processed/metadata_clean/v1",
+        )
+        yield GeoLSH(
+            input_path=f"{data_root}/processed/metadata_clean/v1",
+            output_path=f"{data_root}/processed/geolsh/v1",
+        )
+
+
 if __name__ == "__main__":
     luigi.build(
         [
-            CleanMetadata(
-                input_path="gs://dsgt-clef-geolifeclef-2024/data/downloaded/2024",
-                output_path="gs://dsgt-clef-geolifeclef-2024/data/processed/metadata_clean",
-            )
+            LogisticWorkflow(),
         ],
         scheduler_host="services.us-central1-a.c.dsgt-clef-2024.internal",
         workers=1,

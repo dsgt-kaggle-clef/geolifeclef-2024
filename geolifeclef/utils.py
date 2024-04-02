@@ -1,5 +1,6 @@
 import os
 import sys
+import time
 from contextlib import contextmanager
 
 from pyspark.sql import SparkSession
@@ -21,7 +22,7 @@ def get_spark(
         .config("spark.driver.cores", cores)
         .config("spark.sql.execution.arrow.pyspark.enabled", "true")
         .config("spark.driver.maxResultSize", "4g")
-        .config("spark.local.dir", local_dir)
+        .config("spark.local.dir", f"{local_dir}/{int(time.time())}")
     )
     for k, v in kwargs.items():
         builder = builder.config(k, v)
