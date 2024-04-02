@@ -1,8 +1,12 @@
 from functools import reduce
 
 import luigi
-from pyspark.ml import Pipeline, PipelineModel
-from pyspark.ml.feature import BucketedRandomProjectionLSH, VectorAssembler
+from contexttimer import Timer
+from pyspark.ml import Pipeline
+from pyspark.ml.classification import LogisticRegression
+from pyspark.ml.evaluation import MultilabelClassificationEvaluator
+from pyspark.ml.feature import SQLTransformer, StandardScaler, VectorAssembler
+from pyspark.ml.tuning import CrossValidator, ParamGridBuilder
 from pyspark.sql import functions as F
 
 from geolifeclef.functions import get_projection_udf
@@ -69,12 +73,170 @@ class CleanMetadata(luigi.Task):
             )
 
 
+class FitLogisticModel(luigi.Task):
+    input_path = luigi.Parameter()
+    output_path = luigi.Parameter()
+
+    features = luigi.ListParameter(default=["lat_proj", "lon_proj"])
+    label = luigi.Parameter(default="speciesId")
+
+    max_iter = luigi.ListParameter(default=[100])
+    reg_param = luigi.ListParameter(default=[0.0])
+    elastic_net_param = luigi.ListParameter(default=[0.0])
+    seed = luigi.IntParameter(default=42)
+
+    def output(self):
+        return maybe_gcs_target(f"{self.output_path}/_SUCCESS")
+
+    def _load(self, spark):
+        return spark.read.parquet(self.input_path)
+
+    def _train_test_split(self, df, train_size=0.8):
+        # use the surveyId to split the data
+        sample_id = df.withColumn(
+            "sample_id", F.crc32(F.col("surveyId").cast("string")) % 100
+        )
+        train = (
+            sample_id.where(F.col("sample_id") < train_size * 100)
+            .drop("sample_id")
+            .cache()
+        )
+        test = (
+            sample_id.where(F.col("sample_id") >= train_size * 100)
+            .drop("sample_id")
+            .cache()
+        )
+        return train, test
+
+    def _pipeline(self):
+        return Pipeline(
+            stages=[
+                VectorAssembler(
+                    inputCols=self.features,
+                    outputCol="features",
+                ),
+                StandardScaler(inputCol="features", outputCol="scaled_features"),
+                LogisticRegression(featuresCol="scaled_features", labelCol=self.label),
+                # and now convert the prediction to a multi-label prediction
+                SQLTransformer(
+                    statement="""
+                        select *, array(prediction) as prediction
+                        except (prediction)
+                        from __this__
+                    """
+                ),
+            ]
+        )
+
+    def _param_grid(self, lr):
+        return (
+            ParamGridBuilder()
+            .addGrid(lr.maxIter, self.max_iter)
+            .addGrid(lr.regParam, self.reg_param)
+            .addGrid(lr.elasticNetParam, self.elastic_net_param)
+            .build()
+        )
+
+    def _calculate_multilabel_stats(self, train, test):
+        """Calculate statistics about the number of rows with multiple labels"""
+
+        train.groupBy("surveyId").count().describe().write.csv(
+            f"{self.output_path}/multilabel_stats/dataset=train", mode="overwrite"
+        )
+        test.groupBy("surveyId").count().describe().write.csv(
+            f"{self.output_path}/multilabel_stats/dataset=test", mode="overwrite"
+        )
+
+    def run(self):
+        with spark_resource() as spark:
+            train, test = self._train_test_split(self._load(spark), train_size=0.8)
+            self._calculate_multilabel_stats(train, test)
+
+            # write the model to disk
+            pipeline = self._pipeline()
+            lr = [
+                stage
+                for stage in pipeline.getStages()
+                if isinstance(stage, LogisticRegression)
+            ][0]
+            cv = CrossValidator(
+                estimator=pipeline,
+                estimatorParamMaps=self._param_grid(lr),
+                evaluator=MultilabelClassificationEvaluator(
+                    predictionCol="prediction",
+                    labelCol="speciesId",
+                    metricName="microF1Measure",
+                ),
+                numFolds=2,
+            )
+
+            with Timer() as t:
+                model = cv.fit(train)
+                model.write().overwrite().save(f"{self.output_path}/model")
+
+            # evaluate on test set
+            predictions = model.transform(test)
+            score = model.getEvaluator().evaluate(predictions)
+
+            # write the results to disk
+            perf = spark.createDataFrame(
+                [
+                    {
+                        "train_time": t.elapsed,
+                        "avg_metrics": model.avgMetrics,
+                        "std_metrics": model.avgMetrics,
+                        "test_metric": score,
+                        "metric_name": model.getEvaluator().getMetricName(),
+                    }
+                ]
+            )
+            perf.write.json(f"{self.output_path}/perf", mode="overwrite")
+            perf.show()
+
+        # write the output
+        with self.output().open("w") as f:
+            f.write("")
+
+
+class FitSubsetLogisticModel(FitLogisticModel):
+    """A logistic model that uses a subset of labels for training.
+
+    This should ideally save us a bit of time. However, we'll need
+    to compute a few statistics to ensure we're doing this in a rigorous
+    way. In particular, we'll want to know if any of these rows will end
+    up with multiple labels. We can simply count this at the beginning
+    to make sure we see something reasonable.
+    """
+
+    k = luigi.IntParameter(default=20)
+    seed = luigi.IntParameter(default=42)
+
+    def _load(self, spark):
+        df = super()._load(spark)
+        return df.join(
+            (
+                df.groupBy("speciesId")
+                .count()
+                .where(F.col("count") > 10)  # make sure there are enough examples
+                .orderBy(F.rand(self.seed))
+                .limit(self.k)
+                .cache()
+            ),
+            "speciesId",
+        )
+
+
 class LogisticWorkflow(luigi.Task):
     def run(self):
         data_root = "gs://dsgt-clef-geolifeclef-2024/data"
         yield CleanMetadata(
             input_path=f"{data_root}/downloaded/2024",
             output_path=f"{data_root}/processed/metadata_clean/v1",
+        )
+
+        yield FitSubsetLogisticModel(
+            input_path=f"{data_root}/processed/metadata_clean/v1",
+            output_path=f"{data_root}/models/subset_logistic/v2",
         )
 
 
