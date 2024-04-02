@@ -5,13 +5,14 @@ from contexttimer import Timer
 from pyspark.ml import Pipeline
 from pyspark.ml.classification import LogisticRegression
 from pyspark.ml.evaluation import MultilabelClassificationEvaluator
-from pyspark.ml.feature import SQLTransformer, StandardScaler, VectorAssembler
-from pyspark.ml.tuning import CrossValidator, ParamGridBuilder
+from pyspark.ml.feature import StandardScaler, VectorAssembler
+from pyspark.ml.tuning import CrossValidator, CrossValidatorModel, ParamGridBuilder
 from pyspark.sql import functions as F
 
 from geolifeclef.functions import get_projection_udf
 from geolifeclef.utils import spark_resource
 
+from .transformer import NaiveMultiClassToMultiLabel
 from .utils import maybe_gcs_target
 
 
@@ -80,6 +81,7 @@ class FitLogisticModel(luigi.Task):
     features = luigi.ListParameter(default=["lat_proj", "lon_proj"])
     label = luigi.Parameter(default="speciesId")
 
+    num_folds = luigi.IntParameter(default=2)
     max_iter = luigi.ListParameter(default=[100])
     reg_param = luigi.ListParameter(default=[0.0])
     elastic_net_param = luigi.ListParameter(default=[0.0])
@@ -117,15 +119,20 @@ class FitLogisticModel(luigi.Task):
                 ),
                 StandardScaler(inputCol="features", outputCol="scaled_features"),
                 LogisticRegression(featuresCol="scaled_features", labelCol=self.label),
-                # and now convert the prediction to a multi-label prediction
-                SQLTransformer(
-                    statement="""
-                        select *, array(prediction) as prediction
-                        except (prediction)
-                        from __this__
-                    """
+                NaiveMultiClassToMultiLabel(
+                    primaryKeyCol="surveyId",
+                    labelCol=self.label,
+                    inputCol="prediction",
+                    outputCol="prediction",
                 ),
             ]
+        )
+
+    def _evaluator(self):
+        return MultilabelClassificationEvaluator(
+            predictionCol="prediction",
+            labelCol=self.label,
+            metricName="microF1Measure",
         )
 
     def _param_grid(self, lr):
@@ -162,27 +169,26 @@ class FitLogisticModel(luigi.Task):
             cv = CrossValidator(
                 estimator=pipeline,
                 estimatorParamMaps=self._param_grid(lr),
-                evaluator=MultilabelClassificationEvaluator(
-                    predictionCol="prediction",
-                    labelCol="speciesId",
-                    metricName="microF1Measure",
-                ),
-                numFolds=2,
+                evaluator=self._evaluator(),
+                numFolds=self.num_folds,
             )
 
-            with Timer() as t:
+            with Timer() as train_timer:
                 model = cv.fit(train)
                 model.write().overwrite().save(f"{self.output_path}/model")
 
             # evaluate on test set
-            predictions = model.transform(test)
-            score = model.getEvaluator().evaluate(predictions)
+            with Timer() as eval_timer:
+                model = CrossValidatorModel.load(f"{self.output_path}/model")
+                predictions = model.transform(test)
+                score = model.getEvaluator().evaluate(predictions)
 
             # write the results to disk
             perf = spark.createDataFrame(
                 [
                     {
-                        "train_time": t.elapsed,
+                        "train_time": train_timer.elapsed,
+                        "eval_time": eval_timer.elapsed,
                         "avg_metrics": model.avgMetrics,
                         "std_metrics": model.avgMetrics,
                         "test_metric": score,
