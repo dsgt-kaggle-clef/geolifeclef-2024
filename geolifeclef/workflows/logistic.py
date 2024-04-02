@@ -81,7 +81,7 @@ class FitLogisticModel(luigi.Task):
     features = luigi.ListParameter(default=["lat_proj", "lon_proj"])
     label = luigi.Parameter(default="speciesId")
 
-    num_folds = luigi.IntParameter(default=2)
+    num_folds = luigi.IntParameter(default=3)
     max_iter = luigi.ListParameter(default=[100])
     reg_param = luigi.ListParameter(default=[0.0])
     elastic_net_param = luigi.ListParameter(default=[0.0])
@@ -91,7 +91,7 @@ class FitLogisticModel(luigi.Task):
         return maybe_gcs_target(f"{self.output_path}/_SUCCESS")
 
     def _load(self, spark):
-        return spark.read.parquet(self.input_path)
+        return spark.read.parquet(self.input_path).where(F.col(self.label).isNotNull())
 
     def _train_test_split(self, df, train_size=0.8):
         # use the surveyId to split the data
@@ -243,6 +243,11 @@ class LogisticWorkflow(luigi.Task):
         yield FitSubsetLogisticModel(
             input_path=f"{data_root}/processed/metadata_clean/v1",
             output_path=f"{data_root}/models/subset_logistic/v2",
+        )
+
+        yield FitLogisticModel(
+            input_path=f"{data_root}/processed/metadata_clean/v1",
+            output_path=f"{data_root}/models/logistic/v2",
         )
 
 
