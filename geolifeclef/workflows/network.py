@@ -129,10 +129,10 @@ class NetworkWorkflow(luigi.Task):
             500,
             1_000,
             5_000,
-            10_000,
-            50_000,
-            100_000,
-            500_000,
+            # 10_000,
+            # 50_000,
+            # 100_000,
+            # 500_000,
         ]:
             task = LSHSimilarityTest(
                 input_path=f"{data_root}/processed/geolsh/v1",
