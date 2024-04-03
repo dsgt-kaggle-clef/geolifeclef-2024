@@ -90,12 +90,17 @@ class FitLogisticModel(luigi.Task):
     reg_param = luigi.ListParameter(default=[0.0])
     elastic_net_param = luigi.ListParameter(default=[0.0])
     seed = luigi.IntParameter(default=42)
+    shuffle_partitions = luigi.IntParameter(default=500)
 
     def output(self):
         return maybe_gcs_target(f"{self.output_path}/_SUCCESS")
 
     def _load(self, spark):
-        return spark.read.parquet(self.input_path).where(F.col(self.label).isNotNull())
+        return (
+            spark.read.parquet(self.input_path)
+            .where(F.col(self.label).isNotNull())
+            .repartition(self.shuffle_partitions, "surveyId")
+        )
 
     def _pipeline(self):
         multilabel = {
@@ -148,8 +153,13 @@ class FitLogisticModel(luigi.Task):
         )
 
     def run(self):
-        with spark_resource() as spark:
-            train = self._load(spark)
+        with spark_resource(
+            **{
+                # increase shuffle partitions to avoid OOM
+                "spark.sql.shuffle.partitions": self.shuffle_partitions,
+            }
+        ) as spark:
+            train = self._load(spark).cache()
             self._calculate_multilabel_stats(train)
 
             # write the model to disk
@@ -243,19 +253,24 @@ class LogisticWorkflow(luigi.Task):
             for strategy in ["naive", "threshold"]
         ]
 
+        # now fit this on a larger dataset to see if this works in a more realistic setting
         yield [
             FitSubsetLogisticModel(
                 multilabel_strategy=strategy,
                 input_path=f"{data_root}/processed/metadata_clean/v1",
-                output_path=f"{data_root}/models/subset_logistic/v3",
+                output_path=f"{data_root}/models/subset_logistic_{strategy}/v4",
             )
             for strategy in ["naive", "threshold"]
         ]
 
-        # yield FitLogisticModel(
-        #     input_path=f"{data_root}/processed/metadata_clean/v1",
-        #     output_path=f"{data_root}/models/logistic/v3",
-        # )
+        yield [
+            FitLogisticModel(
+                multilabel_strategy=strategy,
+                input_path=f"{data_root}/processed/metadata_clean/v1",
+                output_path=f"{data_root}/models/logistic_{strategy}/v4",
+            )
+            for strategy in ["naive", "threshold"]
+        ]
 
 
 if __name__ == "__main__":

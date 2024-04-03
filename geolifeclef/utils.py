@@ -11,7 +11,7 @@ os.environ["PYSPARK_DRIVER_PYTHON"] = sys.executable
 
 def get_spark(
     cores=os.cpu_count(),
-    memory=f"{int(os.cpu_count()*3)}g",
+    memory=f"{int(os.cpu_count()*3.5)}g",
     local_dir="/mnt/data/tmp",
     app_name="geolifeclef",
     **kwargs,
