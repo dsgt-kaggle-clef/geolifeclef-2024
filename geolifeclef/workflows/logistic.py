@@ -1,6 +1,7 @@
 from functools import reduce
 
 import luigi
+import numpy as np
 from contexttimer import Timer
 from pyspark.ml import Pipeline
 from pyspark.ml.classification import LogisticRegression
@@ -12,7 +13,7 @@ from pyspark.sql import functions as F
 from geolifeclef.functions import get_projection_udf
 from geolifeclef.utils import spark_resource
 
-from .transformer import NaiveMultiClassToMultiLabel
+from .transformer import NaiveMultiClassToMultiLabel, ThresholdMultiClassToMultiLabel
 from .utils import maybe_gcs_target
 
 
@@ -80,6 +81,9 @@ class FitLogisticModel(luigi.Task):
 
     features = luigi.ListParameter(default=["lat_proj", "lon_proj"])
     label = luigi.Parameter(default="speciesId")
+    multilabel_strategy = luigi.ChoiceParameter(
+        choices=["naive", "threshold"], default="naive"
+    )
 
     num_folds = luigi.IntParameter(default=3)
     max_iter = luigi.ListParameter(default=[100])
@@ -94,6 +98,20 @@ class FitLogisticModel(luigi.Task):
         return spark.read.parquet(self.input_path).where(F.col(self.label).isNotNull())
 
     def _pipeline(self):
+        multilabel = {
+            "naive": NaiveMultiClassToMultiLabel(
+                primaryKeyCol="surveyId",
+                labelCol=self.label,
+                inputCol="prediction",
+                outputCol="prediction",
+            ),
+            "threshold": ThresholdMultiClassToMultiLabel(
+                primaryKeyCol="surveyId",
+                labelCol=self.label,
+                inputCol="probability",
+                outputCol="prediction",
+            ),
+        }
         return Pipeline(
             stages=[
                 VectorAssembler(
@@ -102,12 +120,7 @@ class FitLogisticModel(luigi.Task):
                 ),
                 StandardScaler(inputCol="features", outputCol="scaled_features"),
                 LogisticRegression(featuresCol="scaled_features", labelCol=self.label),
-                NaiveMultiClassToMultiLabel(
-                    primaryKeyCol="surveyId",
-                    labelCol=self.label,
-                    inputCol="prediction",
-                    outputCol="prediction",
-                ),
+                multilabel[self.multilabel_strategy],
             ]
         )
 
@@ -145,7 +158,7 @@ class FitLogisticModel(luigi.Task):
                 stage
                 for stage in pipeline.getStages()
                 if isinstance(stage, LogisticRegression)
-            ][0]
+            ][-1]
             cv = CrossValidator(
                 estimator=pipeline,
                 estimatorParamMaps=self._param_grid(lr),
@@ -162,11 +175,12 @@ class FitLogisticModel(luigi.Task):
                 [
                     {
                         "train_time": train_timer.elapsed,
-                        "avg_metrics": model.avgMetrics,
-                        "std_metrics": model.avgMetrics,
+                        "avg_metrics": np.array(model.avgMetrics).tolist(),
+                        "std_metrics": np.array(model.avgMetrics).tolist(),
                         "metric_name": model.getEvaluator().getMetricName(),
                     }
-                ]
+                ],
+                schema="train_time double, avg_metrics array<double>, std_metrics array<double>, metric_name string",
             )
             perf.write.json(f"{self.output_path}/perf", mode="overwrite")
             perf.show()
@@ -215,15 +229,33 @@ class LogisticWorkflow(luigi.Task):
         # v1 - multi-class w/ test-train split and cv
         # v2 - conversion to multilabel
         # v3 - drop custom test-train split and rely on cv
-        yield FitSubsetLogisticModel(
-            input_path=f"{data_root}/processed/metadata_clean/v1",
-            output_path=f"{data_root}/models/subset_logistic/v3",
-        )
+        # v4 - add threshold multilabel strategy, add a faster training phase
+        yield [
+            # these runs are meant to validate that the pipeline works as expected before expensive runs
+            FitSubsetLogisticModel(
+                k=3,
+                max_iter=[5],
+                num_folds=2,
+                multilabel_strategy=strategy,
+                input_path=f"{data_root}/processed/metadata_clean/v1",
+                output_path=f"{data_root}/models/subset_logistic_{strategy}/v4_test",
+            )
+            for strategy in ["naive", "threshold"]
+        ]
 
-        yield FitLogisticModel(
-            input_path=f"{data_root}/processed/metadata_clean/v1",
-            output_path=f"{data_root}/models/logistic/v3",
-        )
+        yield [
+            FitSubsetLogisticModel(
+                multilabel_strategy=strategy,
+                input_path=f"{data_root}/processed/metadata_clean/v1",
+                output_path=f"{data_root}/models/subset_logistic/v3",
+            )
+            for strategy in ["naive", "threshold"]
+        ]
+
+        # yield FitLogisticModel(
+        #     input_path=f"{data_root}/processed/metadata_clean/v1",
+        #     output_path=f"{data_root}/models/logistic/v3",
+        # )
 
 
 if __name__ == "__main__":
