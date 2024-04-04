@@ -1,5 +1,6 @@
 import numpy as np
 from pyspark.ml.functions import predict_batch_udf
+from pyspark.sql import functions as F
 from pyspark.sql.types import ArrayType, FloatType
 from scipy.fftpack import dctn
 
@@ -24,3 +25,16 @@ dctn_filter_udf = predict_batch_udf(
     batch_size=4,
     input_tensor_shapes=[[128, 128]],
 )
+
+
+def get_projection_udf():
+    import pyproj
+
+    transformer = pyproj.Transformer.from_crs("epsg:4326", "epsg:32738", always_xy=True)
+
+    @F.udf("struct<lat: double, lon: double>")
+    def proj(lat, lon):
+        x, y = transformer.transform(lon, lat)
+        return (x, y)
+
+    return proj
