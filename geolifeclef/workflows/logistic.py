@@ -84,10 +84,12 @@ class BaseFitModel(luigi.Task):
     multilabel_strategy = luigi.ChoiceParameter(
         choices=["naive", "threshold"], default="naive"
     )
+    k = luigi.IntParameter(default=None)
 
     cores = luigi.IntParameter(default=4)
     memory = luigi.Parameter(default="4g")
 
+    num_folds = luigi.IntParameter(default=3)
     seed = luigi.IntParameter(default=42)
     shuffle_partitions = luigi.IntParameter(default=500)
 
@@ -95,17 +97,34 @@ class BaseFitModel(luigi.Task):
         return maybe_gcs_target(f"{self.output_path}/_SUCCESS")
 
     def _load(self, spark):
-        return (
-            spark.read.parquet(self.input_path)
-            .where(F.col(self.label).isNotNull())
-            .repartition(self.shuffle_partitions, "surveyId")
+        df = spark.read.parquet(self.input_path)
+        if self.k is not None:
+            df = self._subset_df(df)
+        return df.where(F.col(self.label).isNotNull()).repartition(
+            self.shuffle_partitions, "surveyId"
         )
 
-    def _classifier(self, featureCols, labelCol):
+    def _subset_df(self, df):
+        return df.join(
+            (
+                df.groupBy("speciesId")
+                .count()
+                .where(F.col("count") > 10)  # make sure there are enough examples
+                .orderBy(F.rand(self.seed))
+                .limit(self.k)
+                .withColumn(
+                    "speciesSubsetId", F.monotonically_increasing_id().cast("double")
+                )
+                .cache()
+            ),
+            "speciesId",
+        )
+
+    def _classifier(self, featuresCol, labelCol):
         raise NotImplementedError()
 
     def _param_grid(self, pipeline):
-        raise NotImplementedError()
+        return ParamGridBuilder().build()
 
     def _pipeline(self):
         multilabel = {
@@ -198,15 +217,14 @@ class BaseFitModel(luigi.Task):
 
 
 class FitLogisticModel(BaseFitModel):
-    num_folds = luigi.IntParameter(default=3)
     max_iter = luigi.ListParameter(default=[100])
     reg_param = luigi.ListParameter(default=[0.0])
     elastic_net_param = luigi.ListParameter(default=[0.0])
 
-    def _classifier(self, featureCols, labelCol):
+    def _classifier(self, featuresCol, labelCol):
         return Pipeline(
             stages=[
-                StandardScaler(inputCol=featureCols, outputCol="scaled_features"),
+                StandardScaler(inputCol=featuresCol, outputCol="scaled_features"),
                 LogisticRegression(featuresCol="scaled_features", labelCol=labelCol),
             ]
         )
@@ -220,33 +238,6 @@ class FitLogisticModel(BaseFitModel):
             .addGrid(lr.regParam, self.reg_param)
             .addGrid(lr.elasticNetParam, self.elastic_net_param)
             .build()
-        )
-
-
-class FitSubsetLogisticModel(FitLogisticModel):
-    """A logistic model that uses a subset of labels for training.
-
-    This should ideally save us a bit of time. However, we'll need
-    to compute a few statistics to ensure we're doing this in a rigorous
-    way. In particular, we'll want to know if any of these rows will end
-    up with multiple labels. We can simply count this at the beginning
-    to make sure we see something reasonable.
-    """
-
-    k = luigi.IntParameter(default=20)
-
-    def _load(self, spark):
-        df = super()._load(spark)
-        return df.join(
-            (
-                df.groupBy("speciesId")
-                .count()
-                .where(F.col("count") > 10)  # make sure there are enough examples
-                .orderBy(F.rand(self.seed))
-                .limit(self.k)
-                .cache()
-            ),
-            "speciesId",
         )
 
 
@@ -264,7 +255,7 @@ class LogisticWorkflow(luigi.Task):
         # v4 - add threshold multilabel strategy, add a faster training phase
         yield [
             # these runs are meant to validate that the pipeline works as expected before expensive runs
-            FitSubsetLogisticModel(
+            FitLogisticModel(
                 k=3,
                 max_iter=[5],
                 num_folds=2,
@@ -277,7 +268,8 @@ class LogisticWorkflow(luigi.Task):
 
         # now fit this on a larger dataset to see if this works in a more realistic setting
         yield [
-            FitSubsetLogisticModel(
+            FitLogisticModel(
+                k=20,
                 multilabel_strategy=strategy,
                 input_path=f"{data_root}/processed/metadata_clean/v1",
                 output_path=f"{data_root}/models/subset_logistic_{strategy}/v4",
