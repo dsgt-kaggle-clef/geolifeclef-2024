@@ -75,7 +75,7 @@ class CleanMetadata(luigi.Task):
             )
 
 
-class FitLogisticModel(luigi.Task):
+class BaseFitModel(luigi.Task):
     input_path = luigi.Parameter()
     output_path = luigi.Parameter()
 
@@ -85,10 +85,9 @@ class FitLogisticModel(luigi.Task):
         choices=["naive", "threshold"], default="naive"
     )
 
-    num_folds = luigi.IntParameter(default=3)
-    max_iter = luigi.ListParameter(default=[100])
-    reg_param = luigi.ListParameter(default=[0.0])
-    elastic_net_param = luigi.ListParameter(default=[0.0])
+    cores = luigi.IntParameter(default=4)
+    memory = luigi.Parameter(default="4g")
+
     seed = luigi.IntParameter(default=42)
     shuffle_partitions = luigi.IntParameter(default=500)
 
@@ -101,6 +100,12 @@ class FitLogisticModel(luigi.Task):
             .where(F.col(self.label).isNotNull())
             .repartition(self.shuffle_partitions, "surveyId")
         )
+
+    def _classifier(self, featureCols, labelCol):
+        raise NotImplementedError()
+
+    def _param_grid(self, pipeline):
+        raise NotImplementedError()
 
     def _pipeline(self):
         multilabel = {
@@ -123,8 +128,7 @@ class FitLogisticModel(luigi.Task):
                     inputCols=self.features,
                     outputCol="features",
                 ),
-                StandardScaler(inputCol="features", outputCol="scaled_features"),
-                LogisticRegression(featuresCol="scaled_features", labelCol=self.label),
+                self._classifier("features", self.label),
                 multilabel[self.multilabel_strategy],
             ]
         )
@@ -136,15 +140,6 @@ class FitLogisticModel(luigi.Task):
             metricName="microF1Measure",
         )
 
-    def _param_grid(self, lr):
-        return (
-            ParamGridBuilder()
-            .addGrid(lr.maxIter, self.max_iter)
-            .addGrid(lr.regParam, self.reg_param)
-            .addGrid(lr.elasticNetParam, self.elastic_net_param)
-            .build()
-        )
-
     def _calculate_multilabel_stats(self, train):
         """Calculate statistics about the number of rows with multiple labels"""
 
@@ -154,24 +149,21 @@ class FitLogisticModel(luigi.Task):
 
     def run(self):
         with spark_resource(
+            cores=self.cores,
+            memory=self.memory,
             **{
                 # increase shuffle partitions to avoid OOM
                 "spark.sql.shuffle.partitions": self.shuffle_partitions,
-            }
+            },
         ) as spark:
             train = self._load(spark).cache()
             self._calculate_multilabel_stats(train)
 
             # write the model to disk
             pipeline = self._pipeline()
-            lr = [
-                stage
-                for stage in pipeline.getStages()
-                if isinstance(stage, LogisticRegression)
-            ][-1]
             cv = CrossValidator(
                 estimator=pipeline,
-                estimatorParamMaps=self._param_grid(lr),
+                estimatorParamMaps=self._param_grid(pipeline),
                 evaluator=self._evaluator(),
                 numFolds=self.num_folds,
             )
@@ -190,7 +182,12 @@ class FitLogisticModel(luigi.Task):
                         "metric_name": model.getEvaluator().getMetricName(),
                     }
                 ],
-                schema="train_time double, avg_metrics array<double>, std_metrics array<double>, metric_name string",
+                schema="""
+                    train_time double, 
+                    avg_metrics array<double>, 
+                    std_metrics array<double>, 
+                    metric_name string
+                """,
             )
             perf.write.json(f"{self.output_path}/perf", mode="overwrite")
             perf.show()
@@ -198,6 +195,32 @@ class FitLogisticModel(luigi.Task):
         # write the output
         with self.output().open("w") as f:
             f.write("")
+
+
+class FitLogisticModel(BaseFitModel):
+    num_folds = luigi.IntParameter(default=3)
+    max_iter = luigi.ListParameter(default=[100])
+    reg_param = luigi.ListParameter(default=[0.0])
+    elastic_net_param = luigi.ListParameter(default=[0.0])
+
+    def _classifier(self, featureCols, labelCol):
+        return Pipeline(
+            stages=[
+                StandardScaler(inputCol=featureCols, outputCol="scaled_features"),
+                LogisticRegression(featuresCol="scaled_features", labelCol=labelCol),
+            ]
+        )
+
+    def _param_grid(self, pipeline):
+        # from the pipeline, let's extract the logistic regression model
+        lr = pipeline.getStages()[-2].getStages()[-1]
+        return (
+            ParamGridBuilder()
+            .addGrid(lr.maxIter, self.max_iter)
+            .addGrid(lr.regParam, self.reg_param)
+            .addGrid(lr.elasticNetParam, self.elastic_net_param)
+            .build()
+        )
 
 
 class FitSubsetLogisticModel(FitLogisticModel):
@@ -211,7 +234,6 @@ class FitSubsetLogisticModel(FitLogisticModel):
     """
 
     k = luigi.IntParameter(default=20)
-    seed = luigi.IntParameter(default=42)
 
     def _load(self, spark):
         df = super()._load(spark)
