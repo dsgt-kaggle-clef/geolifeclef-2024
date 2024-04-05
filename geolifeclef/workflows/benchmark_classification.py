@@ -1,8 +1,11 @@
-import luigi
-from .logistic import FitLogisticModel, BaseFitModel
-from .utils import RsyncGCSFiles
 from argparse import ArgumentParser
+
+import luigi
 from pyspark.ml.classification import RandomForestClassifier
+from xgboost.spark import SparkXGBClassifier
+
+from .logistic import BaseFitModel, FitLogisticModel
+from .utils import RsyncGCSFiles
 
 
 class FitRandomForestModel(BaseFitModel):
@@ -11,6 +14,15 @@ class FitRandomForestModel(BaseFitModel):
     def _classifier(self, featuresCol: str, labelCol: str):
         return RandomForestClassifier(
             featuresCol=featuresCol, labelCol=labelCol, numTrees=self.num_trees[0]
+        )
+
+
+class FitXGBoostModel(BaseFitModel):
+    device = luigi.Parameter(default="cpu")
+
+    def _classifier(self, featuresCol: str, labelCol: str):
+        return SparkXGBClassifier(
+            features_col=featuresCol, label_col=labelCol, device=self.device
         )
 
 
@@ -24,45 +36,31 @@ class BenchmarkClassificationWorkflow(luigi.Task):
             dst_path=f"{self.local_root}/processed/metadata_clean/v1",
         )
 
-        yield [
-            # these runs are meant to validate that the pipeline works as expected before expensive runs
-            FitLogisticModel(
-                k=3,
-                max_iter=[5],
-                num_folds=2,
-                shuffle_partitions=8,
-                label="speciesSubsetId",
-                input_path=f"{self.local_root}/processed/metadata_clean/v1",
-                output_path=f"{self.local_root}/models/benchmark_classification/v1_test/logistic",
-            ),
-            FitRandomForestModel(
-                k=3,
-                num_trees=[5],
-                num_folds=2,
-                shuffle_partitions=8,
-                label="speciesSubsetId",
-                input_path=f"{self.local_root}/processed/metadata_clean/v1",
-                output_path=f"{self.local_root}/models/benchmark_classification/v1_test/random_forest",
-            ),
-        ]
-
-        # now fit this on a larger dataset to see if this works in a more realistic setting
-        yield [
-            FitLogisticModel(
-                k=20,
-                shuffle_partitions=8,
-                label="speciesSubsetId",
-                input_path=f"{self.local_root}/processed/metadata_clean/v1",
-                output_path=f"{self.local_root}/models/benchmark_classification/v1/logistic",
-            ),
-            FitRandomForestModel(
-                k=20,
-                shuffle_partitions=8,
-                label="speciesSubsetId",
-                input_path=f"{self.local_root}/processed/metadata_clean/v1",
-                output_path=f"{self.local_root}/models/benchmark_classification/v1/random_forest",
-            ),
-        ]
+        for k in [3, 20, 100]:
+            yield [
+                # these runs are meant to validate that the pipeline works as expected before expensive runs
+                FitLogisticModel(
+                    k=k,
+                    shuffle_partitions=32,
+                    label="speciesSubsetId",
+                    input_path=f"{self.local_root}/processed/metadata_clean/v1",
+                    output_path=f"{self.local_root}/models/benchmark_classification/v2/model=logistic/k={k}",
+                ),
+                FitRandomForestModel(
+                    k=k,
+                    shuffle_partitions=32,
+                    label="speciesSubsetId",
+                    input_path=f"{self.local_root}/processed/metadata_clean/v1",
+                    output_path=f"{self.local_root}/models/benchmark_classification/v2/model=random_forest/k={k}",
+                ),
+                FitXGBoostModel(
+                    k=k,
+                    shuffle_partitions=32,
+                    label="speciesSubsetId",
+                    input_path=f"{self.local_root}/processed/metadata_clean/v1",
+                    output_path=f"{self.local_root}/models/benchmark_classification/v2/model=xgboost/k={k}",
+                ),
+            ]
 
 
 if __name__ == "__main__":
@@ -73,5 +71,5 @@ if __name__ == "__main__":
     luigi.build(
         [BenchmarkClassificationWorkflow()],
         scheduler_host=args.scheduler_host,
-        workers=4,
+        workers=1,
     )

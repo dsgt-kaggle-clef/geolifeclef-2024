@@ -86,9 +86,6 @@ class BaseFitModel(luigi.Task):
     )
     k = luigi.IntParameter(default=None)
 
-    cores = luigi.IntParameter(default=4)
-    memory = luigi.Parameter(default="4g")
-
     num_folds = luigi.IntParameter(default=3)
     seed = luigi.IntParameter(default=42)
     shuffle_partitions = luigi.IntParameter(default=500)
@@ -168,8 +165,6 @@ class BaseFitModel(luigi.Task):
 
     def run(self):
         with spark_resource(
-            cores=self.cores,
-            memory=self.memory,
             **{
                 # increase shuffle partitions to avoid OOM
                 "spark.sql.shuffle.partitions": self.shuffle_partitions,
@@ -202,9 +197,9 @@ class BaseFitModel(luigi.Task):
                     }
                 ],
                 schema="""
-                    train_time double, 
-                    avg_metrics array<double>, 
-                    std_metrics array<double>, 
+                    train_time double,
+                    avg_metrics array<double>,
+                    std_metrics array<double>,
                     metric_name string
                 """,
             )
