@@ -13,8 +13,8 @@ from pyspark.sql import functions as F
 from geolifeclef.functions import get_projection_udf
 from geolifeclef.utils import spark_resource
 
+from ..utils import maybe_gcs_target
 from .transformer import NaiveMultiClassToMultiLabel, ThresholdMultiClassToMultiLabel
-from .utils import maybe_gcs_target
 
 
 class CleanMetadata(luigi.Task):

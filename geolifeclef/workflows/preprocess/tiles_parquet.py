@@ -1,15 +1,15 @@
 """Convert tif files into parquet files that contain tiles of the original image.
 
 usage:
-    python -m geolifeclef.workflows.tiles_parquet
+    python -m geolifeclef.workflows.preprocess.tiles_parquet
 """
 
 import itertools
 import os
+import shutil
 from argparse import ArgumentParser
 from multiprocessing import Pool
 from pathlib import Path
-import shutil
 
 import luigi
 import luigi.contrib.gcs
