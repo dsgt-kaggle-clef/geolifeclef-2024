@@ -19,14 +19,13 @@ def get_spark(
     """Get a spark session for a single driver."""
     builder = (
         SparkSession.builder.config("spark.driver.memory", memory)
-        .config("spark.driver.cores", cores)
         .config("spark.sql.execution.arrow.pyspark.enabled", "true")
         .config("spark.driver.maxResultSize", "4g")
         .config("spark.local.dir", f"{local_dir}/{int(time.time())}")
     )
     for k, v in kwargs.items():
         builder = builder.config(k, v)
-    return builder.appName(app_name).getOrCreate()
+    return builder.appName(app_name).master(f"local[{cores}]").getOrCreate()
 
 
 @contextmanager
