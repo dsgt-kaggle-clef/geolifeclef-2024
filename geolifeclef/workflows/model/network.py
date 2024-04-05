@@ -7,8 +7,8 @@ from pyspark.sql import functions as F
 
 from geolifeclef.utils import spark_resource
 
+from ..utils import maybe_gcs_target
 from .logistic import CleanMetadata
-from .utils import maybe_gcs_target
 
 
 class GeoLSH(luigi.Task):

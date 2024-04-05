@@ -8,8 +8,8 @@ from xgboost.spark import SparkXGBClassifier
 
 from geolifeclef.utils import spark_resource
 
+from ..utils import RsyncGCSFiles
 from .logistic import BaseFitModel, FitLogisticModel
-from .utils import RsyncGCSFiles
 
 
 class FitRandomForestModel(BaseFitModel):

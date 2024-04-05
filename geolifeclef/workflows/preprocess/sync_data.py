@@ -8,7 +8,8 @@ from pathlib import Path
 from textwrap import dedent
 
 import luigi
-from .utils import BashScriptTask, RsyncGCSFiles
+
+from ..utils import BashScriptTask, RsyncGCSFiles
 
 
 class UnzipFiles(BashScriptTask):
