@@ -23,7 +23,7 @@ class FitXGBoostModel(BaseFitModel):
         )
 
 
-class BaselineWorkflow(luigi.Task):
+class XGBoostWorkflow(luigi.Task):
     remote_root = luigi.Parameter(default="gs://dsgt-clef-geolifeclef-2024/data")
     local_root = luigi.Parameter(default="/mnt/data/geolifeclef-2024/data")
 
@@ -62,7 +62,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     luigi.build(
-        [BaselineWorkflow()],
+        [XGBoostWorkflow()],
         scheduler_host=args.scheduler_host,
         workers=1,
     )
