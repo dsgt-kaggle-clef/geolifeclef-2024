@@ -21,3 +21,6 @@ dependencies = { file = "requirements.txt" }
 where = ["."]
 include = ["geolifeclef"]
 namespaces = false
+
+[tool.flake8]
+max-line-length = 88
