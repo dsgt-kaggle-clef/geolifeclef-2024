@@ -79,11 +79,11 @@ class BaseFitModel(luigi.Task):
     output_path = luigi.Parameter()
 
     features = luigi.ListParameter(default=["lat_proj", "lon_proj"])
-    label = luigi.Parameter(default="speciesId")
+    label = luigi.Parameter(default="target")
     multilabel_strategy = luigi.ChoiceParameter(
         choices=["naive", "threshold"], default="naive"
     )
-    k = luigi.IntParameter(default=None)
+    k = luigi.OptionalIntParameter(default=None)
 
     num_folds = luigi.IntParameter(default=3)
     seed = luigi.IntParameter(default=42)
@@ -96,9 +96,21 @@ class BaseFitModel(luigi.Task):
         df = spark.read.parquet(self.input_path)
         if self.k is not None:
             df = self._subset_df(df)
-        return df.where(F.col(self.label).isNotNull()).repartition(
-            self.shuffle_partitions, "surveyId"
+        return (
+            self._target_mapping(df, "speciesId", self.label)
+            .where(F.col(self.label).isNotNull())
+            .repartition(self.shuffle_partitions, "surveyId")
         )
+
+    def _target_mapping(self, df, src, dst):
+        """Create a mapping from the speciesId to a unique identifier"""
+        mapping = (
+            df.select(src)
+            .distinct()
+            .orderBy(src)
+            .withColumn(dst, F.monotonically_increasing_id().astype("double"))
+        )
+        return df.join(mapping, src)
 
     def _subset_df(self, df):
         return df.join(
@@ -108,9 +120,6 @@ class BaseFitModel(luigi.Task):
                 .where(F.col("count") > 10)  # make sure there are enough examples
                 .orderBy(F.rand(self.seed))
                 .limit(self.k)
-                .withColumn(
-                    "speciesSubsetId", F.monotonically_increasing_id().cast("double")
-                )
                 .cache()
             ),
             "speciesId",

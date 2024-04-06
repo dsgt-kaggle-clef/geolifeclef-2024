@@ -54,7 +54,6 @@ class BenchmarkClassificationWorkflow(luigi.Task):
                         FitLogisticModel(
                             k=k,
                             shuffle_partitions=32,
-                            label="speciesSubsetId",
                             input_path=f"{self.local_root}/processed/metadata_clean/v1",
                             output_path=f"{self.local_root}/models/benchmark_classification/v2/model=logistic/k={k}",
                         ),
@@ -63,7 +62,6 @@ class BenchmarkClassificationWorkflow(luigi.Task):
                         FitRandomForestModel(
                             k=k,
                             shuffle_partitions=32,
-                            label="speciesSubsetId",
                             input_path=f"{self.local_root}/processed/metadata_clean/v1",
                             output_path=f"{self.local_root}/models/benchmark_classification/v2/model=random_forest/k={k}",
                         ),
@@ -78,7 +76,6 @@ class BenchmarkClassificationWorkflow(luigi.Task):
                             k=k,
                             shuffle_partitions=32,
                             num_workers=num_workers,
-                            label="speciesSubsetId",
                             input_path=f"{self.local_root}/processed/metadata_clean/v1",
                             output_path=f"{self.local_root}/models/benchmark_classification/v2/model=xgboost_n{num_workers}/k={k}",
                         )
@@ -91,7 +88,6 @@ class BenchmarkClassificationWorkflow(luigi.Task):
                                 shuffle_partitions=32,
                                 num_workers=num_workers,
                                 device="gpu",
-                                label="speciesSubsetId",
                                 input_path=f"{self.local_root}/processed/metadata_clean/v1",
                                 output_path=f"{self.local_root}/models/benchmark_classification/v2/model=xgboost_gpu_n{num_workers}/k={k}",
                             )

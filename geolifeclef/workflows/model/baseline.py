@@ -1,4 +1,5 @@
 import os
+from argparse import ArgumentParser
 
 import luigi
 from xgboost.spark import SparkXGBClassifier
@@ -9,10 +10,12 @@ from .base_tasks import BaseFitModel
 
 class FitXGBoostModel(BaseFitModel):
     device = luigi.Parameter(default="cpu")
+    subsample = luigi.FloatParameter(default=1.0)
     num_workers = luigi.IntParameter(default=os.cpu_count())
 
     def _classifier(self, featuresCol: str, labelCol: str):
         return SparkXGBClassifier(
+            subsample=self.subsample,
             features_col=featuresCol,
             label_col=labelCol,
             device=self.device,
@@ -43,6 +46,8 @@ class BaselineWorkflow(luigi.Task):
 
         yield [
             FitXGBoostModel(
+                num_workers=8,
+                subsample=0.1,
                 multilabel_strategy=strategy,
                 input_path=f"{self.local_root}/processed/metadata_clean/v1",
                 output_path=f"{self.local_root}/models/baseline_xgboost_{strategy}/v1",
@@ -52,8 +57,12 @@ class BaselineWorkflow(luigi.Task):
 
 
 if __name__ == "__main__":
+    parser = ArgumentParser()
+    parser.add_argument("--scheduler-host", default="localhost")
+    args = parser.parse_args()
+
     luigi.build(
         [BaselineWorkflow()],
-        scheduler_host="services.us-central1-a.c.dsgt-clef-2024.internal",
+        scheduler_host=args.scheduler_host,
         workers=1,
     )
