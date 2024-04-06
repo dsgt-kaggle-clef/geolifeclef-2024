@@ -63,7 +63,7 @@ class LSHSimilarityJoin(luigi.Task):
     input_path = luigi.Parameter()
     output_path = luigi.Parameter()
     threshold = luigi.IntParameter(default=100)
-    num_partitions = luigi.IntParameter(default=1024)
+    num_partitions = luigi.IntParameter(default=200)
 
     def output(self):
         return [
@@ -85,9 +85,11 @@ class LSHSimilarityJoin(luigi.Task):
             model = PipelineModel.load(f"{self.input_path}/model")
             data = (
                 spark.read.parquet(f"{self.input_path}/data")
+                .select("dataset", "surveyId", "speciesId", "features")
                 .repartition(self.num_partitions)
                 .cache()
             )
+            data.printSchema()
 
             # now for different values of the threshold, we see the average number of neighbors
             # the euclidean distance is measured in meters, so let's choose reasonable values based
@@ -95,7 +97,7 @@ class LSHSimilarityJoin(luigi.Task):
             # start to whittle down after having the results materialized.
             with Timer() as timer:
                 edges_path = f"{self.output_path}/edges/threshold={self.threshold}"
-                (
+                edges = (
                     model.stages[-1]
                     .approxSimilarityJoin(
                         data,
@@ -112,8 +114,9 @@ class LSHSimilarityJoin(luigi.Task):
                         F.col("datasetB.speciesId").alias("dstSpeciesId"),
                         "euclidean",
                     )
-                    .write.parquet(edges_path, mode="overwrite")
                 )
+                edges.printSchema()
+                edges.write.parquet(edges_path, mode="overwrite")
 
             with self.output()[1].open("w") as f:
                 res = {"threshold": self.threshold, "time": timer.elapsed}
@@ -135,7 +138,7 @@ class NetworkWorkflow(luigi.Task):
             input_path=f"{self.local_root}/processed/metadata_clean/v1",
             output_path=f"{self.local_root}/processed/geolsh/v1",
         )
-        # everything within 50km is considered similar here
+        # everything within 100km is considered similar here
         yield LSHSimilarityJoin(
             input_path=f"{self.local_root}/processed/geolsh/v1",
             output_path=f"{self.local_root}/processed/geolsh_graph/v1",
