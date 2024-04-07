@@ -124,6 +124,69 @@ class LSHSimilarityJoin(luigi.Task):
                 print(res)
 
 
+class GenerateEdges(luigi.Task):
+    input_path = luigi.Parameter()
+    output_path = luigi.Parameter()
+    threshold = luigi.IntParameter(default=100)
+    num_partitions = luigi.IntParameter(default=64)
+
+    def output(self):
+        return [
+            maybe_gcs_target(
+                f"{self.output_path}/survey_edges/threshold={self.threshold}/_SUCCESS"
+            ),
+            maybe_gcs_target(
+                f"{self.output_path}/species_edges/threshold={self.threshold}/_SUCCESS"
+            ),
+            maybe_gcs_target(
+                f"{self.output_path}/timing/threshold={self.threshold}/result.json",
+            ),
+        ]
+
+    def _generate_edgelist(self, df, src, dst):
+        return df.groupBy(src, dst).agg(F.count("*").alias("n"))
+
+    def _process(self, spark, df, name, src, dst):
+        edges_path = f"{self.output_path}/{name}_edges/threshold={self.threshold}"
+        stats_path = f"{self.output_path}/{name}_stats/threshold={self.threshold}"
+        (
+            self._generate_edgelist(df, src, dst)
+            .repartition(self.num_partitions)
+            .write.parquet(edges_path, mode="overwrite")
+        )
+        spark.read.parquet(edges_path).describe().write.parquet(
+            f"{stats_path}/name=freq", mode="overwrite"
+        )
+        spark.read.parquet(edges_path).groupBy("n").count().describe().write.parquet(
+            f"{stats_path}/name=degree", mode="overwrite"
+        )
+        spark.read.parquet(stats_path).show()
+
+    def run(self):
+        with spark_resource() as spark:
+            df = spark.read.parquet(self.input_path).where(
+                f"euclidean < {self.threshold}"
+            )
+
+            # survey edges
+            with Timer() as t1:
+                self._process(spark, df, "survey", "srcSurveyId", "dstSpeciesId")
+
+            # species edges
+            with Timer() as t2:
+                self._process(spark, df, "species", "srcSpeciesId", "dstSpeciesId")
+
+            with self.output()[-1].open("w") as f:
+                json.dump(
+                    {
+                        "time_survey": t1.elapsed,
+                        "time_species": t2.elapsed,
+                        "df_count": df.count(),
+                    },
+                    f,
+                )
+
+
 class NetworkWorkflow(luigi.Task):
     remote_root = luigi.Parameter(default="gs://dsgt-clef-geolifeclef-2024/data")
     local_root = luigi.Parameter(default="/mnt/data/geolifeclef-2024/data")
@@ -144,6 +207,16 @@ class NetworkWorkflow(luigi.Task):
             output_path=f"{self.local_root}/processed/geolsh_graph/v1",
             threshold=self.threshold,
         )
+
+        # now let's compute edges in 10km increments
+        yield [
+            GenerateEdges(
+                input_path=f"{self.local_root}/processed/geolsh_graph/v1/edges/threshold={self.threshold}",
+                output_path=f"{self.local_root}/processed/geolsh_nn_graph/v2",
+                threshold=threshold,
+            )
+            for threshold in [(i + 1) * 10_000 for i in range(10)]
+        ]
 
 
 if __name__ == "__main__":
