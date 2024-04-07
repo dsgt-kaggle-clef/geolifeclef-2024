@@ -139,12 +139,6 @@ class GenerateEdges(luigi.Task):
                 f"{self.output_path}/species_edges/threshold={self.threshold}/_SUCCESS"
             ),
             maybe_gcs_target(
-                f"{self.output_path}/survey_stats/threshold={self.threshold}/_SUCCESS"
-            ),
-            maybe_gcs_target(
-                f"{self.output_path}/species_stats/threshold={self.threshold}/_SUCCESS"
-            ),
-            maybe_gcs_target(
                 f"{self.output_path}/timing/threshold={self.threshold}/result.json",
             ),
         ]
@@ -160,7 +154,7 @@ class GenerateEdges(luigi.Task):
             .repartition(self.num_partitions)
             .write.parquet(edges_path, mode="overwrite")
         )
-        spark.read.parquet(edges_path).groupBy(src).write.parquet(
+        spark.read.parquet(edges_path).describe().write.parquet(
             f"{stats_path}/name=freq", mode="overwrite"
         )
         spark.read.parquet(edges_path).groupBy("n").count().describe().write.parquet(
@@ -213,6 +207,16 @@ class NetworkWorkflow(luigi.Task):
             output_path=f"{self.local_root}/processed/geolsh_graph/v1",
             threshold=self.threshold,
         )
+
+        # now let's compute edges in 10km increments
+        yield [
+            GenerateEdges(
+                input_path=f"{self.local_root}/processed/geolsh_graph/v1/edges/threshold={self.threshold}",
+                output_path=f"{self.local_root}/processed/geolsh_nn_graph/v2",
+                threshold=threshold,
+            )
+            for threshold in [(i + 1) * 10_000 for i in range(10)]
+        ]
 
 
 if __name__ == "__main__":
