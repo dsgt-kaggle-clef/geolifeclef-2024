@@ -11,6 +11,7 @@ torch
 torchvision
 transformers
 xgboost
+node2vec-fugue @ git+https://github.com/graph-embedding/node2vec.git
 
 tqdm
 contexttimer
