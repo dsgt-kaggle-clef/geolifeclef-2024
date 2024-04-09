@@ -1,6 +1,6 @@
 import json
+import logging
 from argparse import ArgumentParser
-from functools import reduce
 
 import luigi
 from contexttimer import Timer
@@ -232,6 +232,12 @@ class Node2VecBase(luigi.Task):
     max_out_degree = luigi.IntParameter(default=10_000)
     vector_size = luigi.IntParameter(default=128)
     checkpoint_dir = luigi.Parameter(default="/mnt/data/tmp/checkpoints")
+    checkpoint_interval = luigi.IntParameter(default=5)
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # enable logging
+        logging.basicConfig(level=logging.INFO)
 
     def _get_node2vec(self, spark):
         return Node2VecSpark(
@@ -245,7 +251,8 @@ class Node2VecBase(luigi.Task):
             {},
             max_out_degree=self.max_out_degree,
             vector_size=self.vector_size,
-            checkpoint_dir=self.checkpoint_dir,
+            # checkpoint_dir=self.checkpoint_dir,
+            # checkpoint_interval=self.checkpoint_interval,
         )
 
 
@@ -285,7 +292,7 @@ class Node2VecIndex(Node2VecBase):
 
 
 class Node2VecWalk(Node2VecBase):
-    shuffle_partitions = luigi.IntParameter(default=3000)
+    shuffle_partitions = luigi.IntParameter(default=500)
 
     def output(self):
         return [
