@@ -5,6 +5,7 @@ import luigi
 from contexttimer import Timer
 from pyspark.ml import Pipeline, PipelineModel
 from pyspark.ml.feature import BucketedRandomProjectionLSH, VectorAssembler
+from pyspark.sql import Window
 from pyspark.sql import functions as F
 
 from geolifeclef.utils import spark_resource
@@ -145,12 +146,15 @@ class GenerateEdges(luigi.Task):
     def _generate_edgelist(self, df, src, dst):
         return df.groupBy(src, dst).agg(F.count("*").alias("n"))
 
+    def _path_suffix(self):
+        return f"threshold={self.threshold}"
+
     def _process(self, spark, df, name, src, dst):
-        edges_path = f"{self.output_path}/{name}_edges/threshold={self.threshold}"
-        stats_path = f"{self.output_path}/{name}_stats/threshold={self.threshold}"
+        edges_path = f"{self.output_path}/{name}_edges/{self._path_suffix()}"
+        stats_path = f"{self.output_path}/{name}_stats/{self._path_suffix()}"
         (
             self._generate_edgelist(df, src, dst)
-            .repartition(self.num_partitions)
+            .repartition(self.num_partitions, [src])
             .write.parquet(edges_path, mode="overwrite")
         )
         spark.read.parquet(edges_path).describe().write.parquet(
@@ -186,42 +190,32 @@ class GenerateEdges(luigi.Task):
                 )
 
 
-class SubsetEdges(luigi.Task):
-    input_path = luigi.Parameter()
-    output_path = luigi.Parameter()
-    src = luigi.Parameter()
-    dst = luigi.Parameter()
-    k = luigi.IntParameter(default=100)
-    seed = luigi.IntParameter(default=42)
+class GenerateKNNEdges(GenerateEdges):
+    k = luigi.IntParameter(default=20)
 
-    def output(self):
-        return maybe_gcs_target(f"{self.output_path}/_SUCCESS")
+    def _path_suffix(self):
+        return f"threshold={self.threshold}/k={self.k}"
 
-    def run(self):
-        with spark_resource() as spark:
-            edges = spark.read.parquet(self.input_path)
-
-            # randomly sample src and edges
-            srcs = (
-                edges.select(self.src)
-                .distinct()
-                .orderBy(F.rand(self.seed))
-                .limit(self.k)
+    def _generate_edgelist(self, df, src, dst):
+        return (
+            df.groupBy(src, dst)
+            .agg(F.min("euclidean").alias("dist"), F.count("*").alias("n"))
+            # if this is a species to species edge, we need to filter out self edges
+            .where(F.lit(True) if src == "srcSurveyId" else F.col(src) != F.col(dst))
+            .withColumn(
+                "rank",
+                F.row_number().over(Window.partitionBy(src).orderBy(F.asc("dist"))),
             )
-            dst = (
-                edges.select(self.dst)
-                .distinct()
-                .orderBy(F.rand(self.seed))
-                .limit(self.k)
-            )
-            edges = edges.join(srcs, on=self.src).join(dst, on=self.dst)
-            edges.write.parquet(self.output_path, mode="overwrite")
+            .where(f"rank <= {self.k}")
+            .drop("rank")
+        )
 
 
 class NetworkWorkflow(luigi.Task):
     remote_root = luigi.Parameter(default="gs://dsgt-clef-geolifeclef-2024/data")
     local_root = luigi.Parameter(default="/mnt/data/geolifeclef-2024/data")
     threshold = luigi.IntParameter(default=100_000)
+    chosen_threshold = luigi.IntParameter(default=50_000)
 
     def run(self):
         yield RsyncGCSFiles(
@@ -247,15 +241,21 @@ class NetworkWorkflow(luigi.Task):
                 threshold=threshold,
             )
             for threshold in [(i + 1) * 10_000 for i in range(10)]
+        ] + [
+            # we only compute knn graph for a single threshold, but using multiple values of k
+            GenerateKNNEdges(
+                input_path=f"{self.local_root}/processed/geolsh_graph/v1/edges/threshold={self.chosen_threshold}",
+                output_path=f"{self.local_root}/processed/geolsh_knn_graph/v2",
+                threshold=self.threshold,
+                k=k,
+            )
+            for k in [10]
         ]
 
-        # let's run node2vec on a subset of data for testing
-        yield SubsetEdges(
-            input_path=f"{self.local_root}/processed/geolsh_nn_graph/v2/survey_edges/threshold={self.threshold}",
-            output_path=f"{self.local_root}/processed/geolsh_nn_graph/v2_subset/survey_edges/threshold=50000",
-            src="srcSurveyId",
-            dst="dstSpeciesId",
-            k=100,
+        # let's upload the knn graph to GCS
+        yield RsyncGCSFiles(
+            src_path=f"{self.remote_root}/processed/geolsh_knn_graph/v2",
+            dst_path=f"{self.local_root}/processed/geolsh_knn_graph/v2",
         )
 
 

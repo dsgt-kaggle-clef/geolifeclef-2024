@@ -12,6 +12,38 @@ from geolifeclef.utils import spark_resource
 from ..utils import RsyncGCSFiles, maybe_gcs_target
 
 
+class SubsetEdges(luigi.Task):
+    input_path = luigi.Parameter()
+    output_path = luigi.Parameter()
+    src = luigi.Parameter()
+    dst = luigi.Parameter()
+    k = luigi.IntParameter(default=100)
+    seed = luigi.IntParameter(default=42)
+
+    def output(self):
+        return maybe_gcs_target(f"{self.output_path}/_SUCCESS")
+
+    def run(self):
+        with spark_resource() as spark:
+            edges = spark.read.parquet(self.input_path)
+
+            # randomly sample src and edges
+            srcs = (
+                edges.select(self.src)
+                .distinct()
+                .orderBy(F.rand(self.seed))
+                .limit(self.k)
+            )
+            dst = (
+                edges.select(self.dst)
+                .distinct()
+                .orderBy(F.rand(self.seed))
+                .limit(self.k)
+            )
+            edges = edges.join(srcs, on=self.src).join(dst, on=self.dst)
+            edges.write.parquet(self.output_path, mode="overwrite")
+
+
 class Node2VecBase(luigi.Task):
     input_path = luigi.Parameter()
     output_path = luigi.Parameter()
@@ -202,7 +234,7 @@ class Node2VecTask(Node2VecBase):
 class Node2VecWorkflow(luigi.Task):
     remote_root = luigi.Parameter(default="gs://dsgt-clef-geolifeclef-2024/data")
     local_root = luigi.Parameter(default="/mnt/data/geolifeclef-2024/data")
-    threshold = luigi.IntParameter(default=100_000)
+    threshold = luigi.IntParameter(default=50_000)
 
     def run(self):
         # TODO: this workflow isn't ready for prime-time
@@ -211,8 +243,18 @@ class Node2VecWorkflow(luigi.Task):
             dst_path=f"{self.local_root}/processed/metadata_clean/v1",
         )
 
+        suffix = f"threshold={self.threshold}/k=10"
+        # let's run node2vec on a subset of data for testing
+        yield SubsetEdges(
+            input_path=f"{self.local_root}/processed/geolsh_knn_graph/v2/survey_edges/{suffix}",
+            output_path=f"{self.local_root}/processed/geolsh_knn_graph/v2_subset/survey_edges/{suffix}",
+            src="srcSurveyId",
+            dst="dstSpeciesId",
+            k=100,
+        )
+
         yield Node2VecTask(
-            input_path=f"{self.local_root}/processed/geolsh_nn_graph/v2_subset/survey_edges/threshold=50000",
+            input_path=f"{self.local_root}/processed/geolsh_knn_graph/v2_subset/survey_edges/{suffix}",
             output_path=f"{self.local_root}/processed/survey_node2vec/v2_subset",
             num_walks=10,
             walk_length=10,
@@ -225,7 +267,7 @@ class Node2VecWorkflow(luigi.Task):
         # now run this for real
         yield [
             Node2VecTask(
-                input_path=f"{self.local_root}/processed/geolsh_nn_graph/v2/{gtype}_edges/threshold=50000",
+                input_path=f"{self.local_root}/processed/geolsh_knn_graph/v2/{gtype}_edges/{suffix}",
                 output_path=f"{self.local_root}/processed/{gtype}_node2vec/v2",
                 src="srcSurveyId" if gtype == "survey" else "srcSpeciesId",
                 dst="dstSpeciesId",
