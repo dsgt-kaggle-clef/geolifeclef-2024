@@ -133,13 +133,13 @@ class GenerateEdges(luigi.Task):
     def output(self):
         return [
             maybe_gcs_target(
-                f"{self.output_path}/survey_edges/threshold={self.threshold}/_SUCCESS"
+                f"{self.output_path}/survey_edges/{self._path_suffix()}/_SUCCESS"
             ),
             maybe_gcs_target(
-                f"{self.output_path}/species_edges/threshold={self.threshold}/_SUCCESS"
+                f"{self.output_path}/species_edges/{self._path_suffix()}/_SUCCESS"
             ),
             maybe_gcs_target(
-                f"{self.output_path}/timing/threshold={self.threshold}/result.json",
+                f"{self.output_path}/timing/{self._path_suffix()}/result.json"
             ),
         ]
 
@@ -197,7 +197,7 @@ class GenerateKNNEdges(GenerateEdges):
         return f"threshold={self.threshold}/k={self.k}"
 
     def _generate_edgelist(self, df, src, dst):
-        return (
+        edges = (
             df.groupBy(src, dst)
             .agg(F.min("euclidean").alias("dist"), F.count("*").alias("n"))
             # if this is a species to species edge, we need to filter out self edges
@@ -209,6 +209,7 @@ class GenerateKNNEdges(GenerateEdges):
             .where(f"rank <= {self.k}")
             .drop("rank")
         )
+        return edges
 
 
 class NetworkWorkflow(luigi.Task):
@@ -244,9 +245,9 @@ class NetworkWorkflow(luigi.Task):
         ] + [
             # we only compute knn graph for a single threshold, but using multiple values of k
             GenerateKNNEdges(
-                input_path=f"{self.local_root}/processed/geolsh_graph/v1/edges/threshold={self.chosen_threshold}",
+                input_path=f"{self.local_root}/processed/geolsh_graph/v1/edges/threshold={self.threshold}",
                 output_path=f"{self.local_root}/processed/geolsh_knn_graph/v2",
-                threshold=self.threshold,
+                threshold=self.chosen_threshold,
                 k=k,
             )
             for k in [10]
@@ -254,8 +255,8 @@ class NetworkWorkflow(luigi.Task):
 
         # let's upload the knn graph to GCS
         yield RsyncGCSFiles(
-            src_path=f"{self.remote_root}/processed/geolsh_knn_graph/v2",
-            dst_path=f"{self.local_root}/processed/geolsh_knn_graph/v2",
+            src_path=f"{self.local_root}/processed/geolsh_knn_graph/v2",
+            dst_path=f"{self.remote_root}/processed/geolsh_knn_graph/v2",
         )
 
 

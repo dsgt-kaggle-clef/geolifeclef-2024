@@ -234,27 +234,26 @@ class Node2VecTask(Node2VecBase):
 class Node2VecWorkflow(luigi.Task):
     remote_root = luigi.Parameter(default="gs://dsgt-clef-geolifeclef-2024/data")
     local_root = luigi.Parameter(default="/mnt/data/geolifeclef-2024/data")
-    threshold = luigi.IntParameter(default=50_000)
 
     def run(self):
         # TODO: this workflow isn't ready for prime-time
         yield RsyncGCSFiles(
-            src_path=f"{self.remote_root}/processed/metadata_clean/v1",
-            dst_path=f"{self.local_root}/processed/metadata_clean/v1",
+            src_path=f"{self.remote_root}/processed/geolsh_knn_graph/v2",
+            dst_path=f"{self.local_root}/processed/geolsh_knn_graph/v2",
         )
 
-        suffix = f"threshold={self.threshold}/k=10"
+        suffix = "threshold=50000/k=10"
         # let's run node2vec on a subset of data for testing
         yield SubsetEdges(
-            input_path=f"{self.local_root}/processed/geolsh_knn_graph/v2/survey_edges/{suffix}",
-            output_path=f"{self.local_root}/processed/geolsh_knn_graph/v2_subset/survey_edges/{suffix}",
-            src="srcSurveyId",
+            input_path=f"{self.local_root}/processed/geolsh_knn_graph/v2/species_edges/{suffix}",
+            output_path=f"{self.local_root}/processed/geolsh_knn_graph/v2_subset/species_edges/{suffix}",
+            src="srcSpeciesId",
             dst="dstSpeciesId",
             k=100,
         )
 
         yield Node2VecTask(
-            input_path=f"{self.local_root}/processed/geolsh_knn_graph/v2_subset/survey_edges/{suffix}",
+            input_path=f"{self.local_root}/processed/geolsh_knn_graph/v2_subset/species_edges/{suffix}",
             output_path=f"{self.local_root}/processed/survey_node2vec/v2_subset",
             num_walks=10,
             walk_length=10,
@@ -262,6 +261,8 @@ class Node2VecWorkflow(luigi.Task):
             q=1.0,
             max_out_degree=100,
             vector_size=32,
+            src="srcSpeciesId",
+            dst="dstSpeciesId",
         )
 
         # now run this for real
@@ -279,12 +280,15 @@ class Node2VecWorkflow(luigi.Task):
                 vector_size=d,
             )
             for (p, q) in [
-                (1.0, 0.5),
+                # (1.0, 0.5),
                 (1.0, 1.0),
-                (1.0, 2.0),
+                # (1.0, 2.0),
             ]
             for d in [64]
-            for gtype in ["survey", "species"]
+            for gtype in [
+                "species",
+                # "survey"
+            ]
         ]
 
 
@@ -294,7 +298,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     luigi.build(
-        [NetworkWorkflow()],
+        [Node2VecWorkflow()],
         scheduler_host=args.scheduler_host,
         workers=1,
     )
