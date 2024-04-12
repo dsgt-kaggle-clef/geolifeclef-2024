@@ -144,7 +144,9 @@ class GenerateEdges(luigi.Task):
         ]
 
     def _generate_edgelist(self, df, src, dst):
-        return df.groupBy(src, dst).agg(F.count("*").alias("n"))
+        return df.groupBy(src, dst).agg(
+            F.min("euclidean").alias("dist"), F.count("*").alias("n")
+        )
 
     def _path_suffix(self):
         return f"threshold={self.threshold}"
