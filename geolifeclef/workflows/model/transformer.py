@@ -1,7 +1,14 @@
+import numpy as np
 from pyspark.ml import Transformer
 from pyspark.ml.functions import vector_to_array
 from pyspark.ml.param import Param, Params, TypeConverters
-from pyspark.ml.param.shared import HasInputCol, HasLabelCol, HasOutputCol, HasThreshold
+from pyspark.ml.param.shared import (
+    HasInputCol,
+    HasInputCols,
+    HasLabelCol,
+    HasOutputCol,
+    HasThreshold,
+)
 from pyspark.ml.util import DefaultParamsReadable, DefaultParamsWritable
 from pyspark.sql import DataFrame
 from pyspark.sql import functions as F
@@ -36,6 +43,77 @@ class HasNumPartitions(Params):
 
     def getNumPartitions(self):
         return self.getOrDefault(self.numPartitions)
+
+
+class HasIndexDim(Params):
+    indexDim = Param(
+        Params._dummy(),
+        "indexDim",
+        "Index dimension",
+        typeConverter=TypeConverters.toInt,
+    )
+
+    def __init__(self):
+        super().__init__()
+
+    def getIndexDim(self):
+        return self.getOrDefault(self.indexDim)
+
+
+class HasOutputColPrefix(Params):
+    outputColPrefix = Param(
+        Params._dummy(),
+        "outputColPrefix",
+        "Prefix for output column",
+        typeConverter=TypeConverters.toString,
+    )
+
+    def __init__(self):
+        super().__init__()
+
+    def getOutputColPrefix(self):
+        return self.getOrDefault(self.outputColPrefix)
+
+
+class ExtractLabelsFromVector(
+    Transformer, HasInputCol, HasOutputColPrefix, HasIndexDim
+):
+    def __init__(self, inputCol="prediction", outputColPrefix="prediction", indexDim=0):
+        super().__init__()
+        self._setDefault(
+            inputCol=inputCol,
+            outputColPrefix=outputColPrefix,
+            indexDim=indexDim,
+        )
+
+    def _transform(self, df: DataFrame) -> DataFrame:
+        arr_col = "tmp_array"
+        df = df.withColumn(arr_col, vector_to_array(self.getInputCol()))
+        for i in range(self.getIndexDim()):
+            df = df.withColumn(
+                f"{self.getOutputColPrefix()}_{i:03d}", F.col(arr_col)[i]
+            )
+        df = df.drop(arr_col)
+        return df
+
+
+class ReconstructDCTCoefficients(Transformer, HasInputCols, HasOutputCol, HasIndexDim):
+    def __init__(self, inputCols=None, outputCol="prediction", indexDim=0):
+        super().__init__()
+        self._setDefault(inputCols=inputCols, outputCol=outputCol, indexDim=indexDim)
+
+    def _transform(self, df: DataFrame) -> DataFrame:
+        return df.withColumn(
+            self.getOutputCol(),
+            F.array_append(
+                F.array(*[F.col(col) for col in self.getInputCols()]),
+                # fill the rest with zero
+                F.udf(
+                    lambda: np.zeros(self.getIndexDim() - len(self.getInputCols())),
+                    "array<double>",
+                )(),
+            ),
+        )
 
 
 class BaseMultiClassToMultiLabel(
