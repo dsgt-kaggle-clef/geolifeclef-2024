@@ -164,13 +164,6 @@ class BaseFitModel(luigi.Task):
             metricName="microF1Measure",
         )
 
-    def _calculate_multilabel_stats(self, train):
-        """Calculate statistics about the number of rows with multiple labels"""
-
-        train.groupBy("surveyId").count().describe().write.csv(
-            f"{self.output_path}/multilabel_stats/dataset=train", mode="overwrite"
-        )
-
     def run(self):
         with spark_resource(
             **{
@@ -179,7 +172,6 @@ class BaseFitModel(luigi.Task):
             },
         ) as spark:
             train = self._load(spark).cache()
-            self._calculate_multilabel_stats(train)
 
             # write the model to disk
             pipeline = self._pipeline()

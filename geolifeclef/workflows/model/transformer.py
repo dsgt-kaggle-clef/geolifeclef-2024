@@ -1,6 +1,6 @@
 import numpy as np
 from pyspark.ml import Transformer
-from pyspark.ml.functions import vector_to_array
+from pyspark.ml.functions import array_to_vector, vector_to_array
 from pyspark.ml.param import Param, Params, TypeConverters
 from pyspark.ml.param.shared import (
     HasInputCol,
@@ -75,8 +75,28 @@ class HasOutputColPrefix(Params):
         return self.getOrDefault(self.outputColPrefix)
 
 
+class IsPreCollated(Params):
+    isPreCollated = Param(
+        Params._dummy(),
+        "isPreCollated",
+        "Whether the data is pre-collated",
+        typeConverter=TypeConverters.toBoolean,
+    )
+
+    def __init__(self):
+        super().__init__()
+
+    def getIsPreCollated(self):
+        return self.getOrDefault(self.isPreCollated)
+
+
 class ExtractLabelsFromVector(
-    Transformer, HasInputCol, HasOutputColPrefix, HasIndexDim
+    Transformer,
+    HasInputCol,
+    HasOutputColPrefix,
+    HasIndexDim,
+    DefaultParamsReadable,
+    DefaultParamsWritable,
 ):
     def __init__(self, inputCol="prediction", outputColPrefix="prediction", indexDim=0):
         super().__init__()
@@ -97,7 +117,14 @@ class ExtractLabelsFromVector(
         return df
 
 
-class ReconstructDCTCoefficients(Transformer, HasInputCols, HasOutputCol, HasIndexDim):
+class ReconstructDCTCoefficients(
+    Transformer,
+    HasInputCols,
+    HasOutputCol,
+    HasIndexDim,
+    DefaultParamsReadable,
+    DefaultParamsWritable,
+):
     def __init__(self, inputCols=None, outputCol="prediction", indexDim=0):
         super().__init__()
         self._setDefault(inputCols=inputCols, outputCol=outputCol, indexDim=indexDim)
@@ -105,13 +132,19 @@ class ReconstructDCTCoefficients(Transformer, HasInputCols, HasOutputCol, HasInd
     def _transform(self, df: DataFrame) -> DataFrame:
         return df.withColumn(
             self.getOutputCol(),
-            F.array_append(
-                F.array(*[F.col(col) for col in self.getInputCols()]),
-                # fill the rest with zero
-                F.udf(
-                    lambda: np.zeros(self.getIndexDim() - len(self.getInputCols())),
-                    "array<double>",
-                )(),
+            array_to_vector(
+                F.concat(
+                    F.array(*[F.col(col) for col in self.getInputCols()]).cast(
+                        "array<double>"
+                    ),
+                    # fill the rest with zero
+                    F.udf(
+                        lambda: np.zeros(
+                            self.getIndexDim() - len(self.getInputCols())
+                        ).tolist(),
+                        "array<double>",
+                    )(),
+                )
             ),
         )
 
@@ -123,6 +156,7 @@ class BaseMultiClassToMultiLabel(
     HasNumPartitions,
     HasPrimaryKeyCol,
     HasLabelCol,
+    IsPreCollated,
     DefaultParamsReadable,
     DefaultParamsWritable,
 ):
@@ -132,6 +166,7 @@ class BaseMultiClassToMultiLabel(
         labelCol="speciesId",
         inputCol="prediction",
         outputCol="prediction",
+        isPreCollated=False,
         numPartitions=200,
     ):
         super().__init__()
@@ -140,6 +175,7 @@ class BaseMultiClassToMultiLabel(
             labelCol=labelCol,
             inputCol=inputCol,
             outputCol=outputCol,
+            isPreCollated=isPreCollated,
             numPartitions=numPartitions,
         )
 
@@ -190,20 +226,26 @@ class ThresholdMultiClassToMultiLabel(BaseMultiClassToMultiLabel, HasThreshold):
         )
 
         # join the predictions with the labels from the original dataframe
-        joined = (
-            df.repartition(self.getNumPartitions(), self.getPrimaryKeyCol())
-            .groupBy(self.getPrimaryKeyCol())
-            .agg(
-                F.array_sort(F.collect_set(self.getLabelCol())).alias(
-                    self.getLabelCol()
-                ),
+
+        if self.getIsPreCollated():
+            collated = df
+        else:
+            collated = (
+                df.repartition(self.getNumPartitions(), self.getPrimaryKeyCol())
+                .groupBy(self.getPrimaryKeyCol())
+                .agg(
+                    F.array_sort(F.collect_set(self.getLabelCol())).alias(
+                        self.getLabelCol()
+                    )
+                )
             )
-            .join(predictions, self.getPrimaryKeyCol(), "left")
+        joined = (
+            collated.join(predictions, self.getPrimaryKeyCol(), "left")
             # fill output with empty arrays for evaluation, otherwise we nullpointer issues
             .withColumn(
                 self.getOutputCol(),
                 F.coalesce(F.col(self.getOutputCol()), F.array().cast("array<double>")),
             )
         )
-
+        # joined.printSchema()
         return joined

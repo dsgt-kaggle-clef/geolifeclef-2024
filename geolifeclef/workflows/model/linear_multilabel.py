@@ -3,9 +3,10 @@ from collections import Counter
 
 import luigi
 import numpy as np
-import scipy.sparse as sp
 from pyspark.ml import Pipeline
+from pyspark.ml.evaluation import MultilabelClassificationEvaluator
 from pyspark.ml.feature import DCT, StandardScaler, VectorAssembler, VectorSlicer
+from pyspark.ml.functions import vector_to_array
 from pyspark.ml.linalg import SparseVector, VectorUDT
 from pyspark.ml.regression import LinearRegression
 from pyspark.ml.tuning import ParamGridBuilder
@@ -37,37 +38,31 @@ class FitLinearMultiLabelModel(BaseFitModel):
 
         @F.udf(VectorUDT())
         def func(array):
-            items = sorted(Counter(array).items())
-            indices = np.array([i for i, _ in items])
-            values = np.array([v for _, v in items])
-            return SparseVector(self.max_species, indices, values)
+            if not array:
+                return SparseVector(self.max_species)
+            return SparseVector(self.max_species, sorted(Counter(array).items()))
 
         return func(array)
+
+    def _subset_df(self, df):
+        return df.limit(self.k)
 
     def _load(self, spark):
         df = super()._load(spark)
         # now we can convert this into a multi-label problem by surveyId
-        return df.groupBy("surveyId").agg(
-            F.mean("lat_proj").alias("lat_proj"),
-            F.mean("lon_proj").alias("lon_proj"),
-            self._collect_sparse_labels(F.collect_list("speciesId")).alias("labels"),
+        return (
+            df.groupBy("surveyId")
+            .agg(
+                F.mean("lat_proj").alias("lat_proj"),
+                F.mean("lon_proj").alias("lon_proj"),
+                self._collect_sparse_labels(F.collect_list("speciesId")).alias(
+                    "labels"
+                ),
+            )
+            .withColumn("labels_arr", vector_to_array("labels"))
         )
 
     def _pipeline(self):
-        multilabel = {
-            "naive": NaiveMultiClassToMultiLabel(
-                primaryKeyCol="surveyId",
-                labelCol=self.label,
-                inputCol="prediction",
-                outputCol="prediction",
-            ),
-            "threshold": ThresholdMultiClassToMultiLabel(
-                primaryKeyCol="surveyId",
-                labelCol=self.label,
-                inputCol="probability",
-                outputCol="prediction",
-            ),
-        }
         return Pipeline(
             stages=[
                 VectorAssembler(
@@ -89,20 +84,32 @@ class FitLinearMultiLabelModel(BaseFitModel):
                     indexDim=self.labels_dim,
                 ),
                 *[
-                    LinearRegression(featuresCol="scaled_features", labelCol=col)
-                    for col in [f"label_{i:03d}" for i in range(self.labels_dim)]
+                    LinearRegression(
+                        featuresCol="scaled_features",
+                        labelCol=f"label_{i:03d}",
+                        predictionCol=f"prediction_{i:03d}",
+                    )
+                    for i in range(self.labels_dim)
                 ],
                 # now project the labels back by concatenating the predictions
                 # together and taking the inverse
                 ReconstructDCTCoefficients(
-                    inputCols=[f"label_{i:03d}" for i in range(self.labels_dim)],
+                    inputCols=[f"prediction_{i:03d}" for i in range(self.labels_dim)],
                     outputCol="dct_prediction",
                     indexDim=self.labels_dim,
                 ),
                 # it's not really a probabiity, but more of a quantization to the nearest
                 # integer
                 DCT(inputCol="dct_prediction", outputCol="probability", inverse=True),
-                multilabel[self.multilabel_strategy],
+                {
+                    "threshold": ThresholdMultiClassToMultiLabel(
+                        primaryKeyCol="surveyId",
+                        labelCol="labels",
+                        inputCol="probability",
+                        outputCol="prediction",
+                        isPreCollated=True,
+                    ),
+                }[self.multilabel_strategy],
             ]
         )
 
@@ -119,6 +126,13 @@ class FitLinearMultiLabelModel(BaseFitModel):
             )
         return builder.build()
 
+    def _evaluator(self):
+        return MultilabelClassificationEvaluator(
+            predictionCol="prediction",
+            labelCol="labels_arr",
+            metricName="microF1Measure",
+        )
+
 
 class Workflow(luigi.Task):
     remote_root = luigi.Parameter(default="gs://dsgt-clef-geolifeclef-2024/data")
@@ -126,11 +140,21 @@ class Workflow(luigi.Task):
 
     def run(self):
         yield RsyncGCSFiles(
-            src_path=f"{self.remote_root}/processed/geolsh_knn_graph/v2",
-            dst_path=f"{self.local_root}/processed/geolsh_knn_graph/v2",
+            src_path=f"{self.remote_root}/processed/metadata_clean/v1",
+            dst_path=f"{self.local_root}/processed/metadata_clean/v1",
         )
 
         # v1 - initial implementation
+        yield [
+            FitLinearMultiLabelModel(
+                k=1000,
+                labels_dim=2,
+                multilabel_strategy=strategy,
+                input_path=f"{self.local_root}/processed/metadata_clean/v1",
+                output_path=f"{self.local_root}/models/linear_multilabel_dct/v1_test",
+            )
+            for strategy in ["threshold"]
+        ]
         yield [
             FitLinearMultiLabelModel(
                 multilabel_strategy=strategy,
