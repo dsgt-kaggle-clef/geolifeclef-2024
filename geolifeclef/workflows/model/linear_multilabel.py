@@ -50,16 +50,11 @@ class FitLinearMultiLabelModel(BaseFitModel):
     def _load(self, spark):
         df = super()._load(spark)
         # now we can convert this into a multi-label problem by surveyId
-        return (
-            df.groupBy("surveyId")
-            .agg(
-                F.mean("lat_proj").alias("lat_proj"),
-                F.mean("lon_proj").alias("lon_proj"),
-                self._collect_sparse_labels(F.collect_list("speciesId")).alias(
-                    "labels"
-                ),
-            )
-            .withColumn("labels_arr", vector_to_array("labels"))
+        return df.groupBy("surveyId").agg(
+            F.mean("lat_proj").alias("lat_proj"),
+            F.mean("lon_proj").alias("lon_proj"),
+            self._collect_sparse_labels(F.collect_list("speciesId")).alias("labels_sp"),
+            F.sort_array(F.collect_set("speciesId")).alias("labels"),
         )
 
     def _pipeline(self):
@@ -71,7 +66,7 @@ class FitLinearMultiLabelModel(BaseFitModel):
                 ),
                 # create a new label for each of the coefficients
                 StandardScaler(inputCol="features", outputCol="scaled_features"),
-                DCT(inputCol="labels", outputCol="labels_dct", inverse=False),
+                DCT(inputCol="labels_sp", outputCol="labels_dct", inverse=False),
                 # slice the first k coefficients
                 VectorSlicer(
                     inputCol="labels_dct",
@@ -129,7 +124,7 @@ class FitLinearMultiLabelModel(BaseFitModel):
     def _evaluator(self):
         return MultilabelClassificationEvaluator(
             predictionCol="prediction",
-            labelCol="labels_arr",
+            labelCol="labels",
             metricName="microF1Measure",
         )
 

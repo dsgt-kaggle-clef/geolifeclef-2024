@@ -87,7 +87,7 @@ class BaseFitModel(luigi.Task):
 
     num_folds = luigi.IntParameter(default=3)
     seed = luigi.IntParameter(default=42)
-    shuffle_partitions = luigi.IntParameter(default=500)
+    shuffle_partitions = luigi.IntParameter(default=200)
 
     def output(self):
         return maybe_gcs_target(f"{self.output_path}/_SUCCESS")
