@@ -1,3 +1,4 @@
+import os
 from argparse import ArgumentParser
 from collections import Counter
 
@@ -11,24 +12,26 @@ from pyspark.ml.linalg import SparseVector, VectorUDT
 from pyspark.ml.regression import LinearRegression
 from pyspark.ml.tuning import ParamGridBuilder
 from pyspark.sql import functions as F
+from xgboost.spark import SparkXGBRegressor
 
 from ..utils import RsyncGCSFiles
 from .base_tasks import BaseFitModel
 from .transformer import (
     ExtractLabelsFromVector,
-    NaiveMultiClassToMultiLabel,
     ReconstructDCTCoefficients,
     ThresholdMultiClassToMultiLabel,
 )
 
 
-class FitLinearMultiLabelModel(BaseFitModel):
-    max_iter = luigi.ListParameter(default=[100])
-    reg_param = luigi.ListParameter(default=[1e-5])
-    elastic_net_param = luigi.ListParameter(default=[0.5])
+class FitMultiLabelModel(BaseFitModel):
     max_species = luigi.IntParameter(default=11255)
-    labels_dim = luigi.IntParameter(default=16)
+    labels_dim = luigi.IntParameter(default=8)
     label = luigi.Parameter(default="speciesId")
+
+    device = luigi.Parameter(default="cpu")
+    subsample = luigi.FloatParameter(default=1.0)
+    num_workers = luigi.IntParameter(default=os.cpu_count())
+    sampling_method = luigi.Parameter(default="uniform")
 
     def _target_mapping(self, df, src, dst):
         return df
@@ -50,11 +53,17 @@ class FitLinearMultiLabelModel(BaseFitModel):
     def _load(self, spark):
         df = super()._load(spark)
         # now we can convert this into a multi-label problem by surveyId
-        return df.groupBy("surveyId").agg(
-            F.mean("lat_proj").alias("lat_proj"),
-            F.mean("lon_proj").alias("lon_proj"),
-            self._collect_sparse_labels(F.collect_list("speciesId")).alias("labels_sp"),
-            F.sort_array(F.collect_set("speciesId")).alias("labels"),
+        return (
+            df.groupBy("surveyId")
+            .agg(
+                F.mean("lat_proj").alias("lat_proj"),
+                F.mean("lon_proj").alias("lon_proj"),
+                self._collect_sparse_labels(F.collect_list("speciesId")).alias(
+                    "labels_sp"
+                ),
+                F.sort_array(F.collect_set("speciesId")).alias("labels"),
+            )
+            .withColumn("is_validation", F.rand(seed=42) < 0.1)
         )
 
     def _pipeline(self):
@@ -79,10 +88,16 @@ class FitLinearMultiLabelModel(BaseFitModel):
                     indexDim=self.labels_dim,
                 ),
                 *[
-                    LinearRegression(
-                        featuresCol="scaled_features",
-                        labelCol=f"label_{i:03d}",
-                        predictionCol=f"prediction_{i:03d}",
+                    SparkXGBRegressor(
+                        features_col="scaled_features",
+                        label_col=f"label_{i:03d}",
+                        prediction_col=f"prediction_{i:03d}",
+                        device=self.device,
+                        num_workers=self.num_workers,
+                        subsample=self.subsample,
+                        sampling_method=self.sampling_method,
+                        early_stopping_rounds=10,
+                        validation_indicator_col="is_validation",
                     )
                     for i in range(self.labels_dim)
                 ],
@@ -110,16 +125,7 @@ class FitLinearMultiLabelModel(BaseFitModel):
 
     def _param_grid(self, pipeline):
         # from the pipeline, let's extract the logistic regression model
-        builder = ParamGridBuilder()
-        for stage in pipeline.getStages():
-            if not isinstance(stage, LinearRegression):
-                continue
-            builder = (
-                builder.addGrid(stage.maxIter, self.max_iter)
-                .addGrid(stage.regParam, self.reg_param)
-                .addGrid(stage.elasticNetParam, self.elastic_net_param)
-            )
-        return builder.build()
+        return ParamGridBuilder().build()
 
     def _evaluator(self):
         return MultilabelClassificationEvaluator(
@@ -132,6 +138,7 @@ class FitLinearMultiLabelModel(BaseFitModel):
 class Workflow(luigi.Task):
     remote_root = luigi.Parameter(default="gs://dsgt-clef-geolifeclef-2024/data")
     local_root = luigi.Parameter(default="/mnt/data/geolifeclef-2024/data")
+    device = luigi.ChoiceParameter(choices=["cpu", "cuda"], default="cuda")
 
     def run(self):
         yield RsyncGCSFiles(
@@ -140,33 +147,56 @@ class Workflow(luigi.Task):
         )
 
         # v1 - initial implementation
+        params = (
+            {
+                "device": self.device,
+                "num_workers": 1,
+                "subsample": 0.1,
+                "sampling_method": "gradient_based",
+            }
+            if self.device == "cuda"
+            else {
+                "device": self.device,
+                "num_workers": os.cpu_count(),
+                "subsample": 0.5,
+                "sampling_method": "uniform",
+            }
+        )
         yield [
-            FitLinearMultiLabelModel(
+            FitMultiLabelModel(
                 k=1000,
-                labels_dim=2,
                 multilabel_strategy=strategy,
+                num_folds=3,
+                labels_dim=labels_dim,
                 input_path=f"{self.local_root}/processed/metadata_clean/v1",
-                output_path=f"{self.local_root}/models/linear_multilabel_dct/v1_test",
+                output_path=f"{self.local_root}/models/xgboost_multilabel_dct_{self.device}_{labels_dim}/v1_test",
+                **params,
             )
             for strategy in ["threshold"]
+            for labels_dim in [1, 2]
         ]
         yield [
-            FitLinearMultiLabelModel(
+            FitMultiLabelModel(
                 multilabel_strategy=strategy,
+                num_folds=3,
+                labels_dim=labels_dim,
                 input_path=f"{self.local_root}/processed/metadata_clean/v1",
-                output_path=f"{self.local_root}/models/linear_multilabel_dct/v1",
+                output_path=f"{self.local_root}/models/xgboost_multilabel_dct_{self.device}_{labels_dim}/v1",
+                **params,
             )
             for strategy in ["threshold"]
+            for labels_dim in [1, 2]
         ]
 
 
 if __name__ == "__main__":
     parser = ArgumentParser()
     parser.add_argument("--scheduler-host", default="localhost")
+    parser.add_argument("--device", default="cpu")
     args = parser.parse_args()
 
     luigi.build(
-        [Workflow()],
+        [Workflow(device=args.device)],
         scheduler_host=args.scheduler_host,
         workers=1,
     )
