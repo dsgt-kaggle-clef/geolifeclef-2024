@@ -1,20 +1,24 @@
+import json
 import os
 from argparse import ArgumentParser
 from collections import Counter
 
 import luigi
 import numpy as np
-from pyspark.ml import Pipeline
+from contexttimer import Timer
+from pyspark.ml import Pipeline, PipelineModel
 from pyspark.ml.evaluation import MultilabelClassificationEvaluator
 from pyspark.ml.feature import DCT, StandardScaler, VectorAssembler, VectorSlicer
 from pyspark.ml.functions import vector_to_array
 from pyspark.ml.linalg import SparseVector, VectorUDT
 from pyspark.ml.regression import LinearRegression
-from pyspark.ml.tuning import ParamGridBuilder
+from pyspark.ml.tuning import CrossValidator, CrossValidatorModel, ParamGridBuilder
 from pyspark.sql import functions as F
 from xgboost.spark import SparkXGBRegressor
 
-from ..utils import RsyncGCSFiles
+from geolifeclef.utils import spark_resource
+
+from ..utils import RsyncGCSFiles, maybe_gcs_target
 from .base_tasks import BaseFitModel
 from .transformer import (
     ExtractLabelsFromVector,
@@ -135,6 +139,101 @@ class FitMultiLabelModel(BaseFitModel):
         )
 
 
+class MakePrediction(luigi.Task):
+    model_path = luigi.Parameter()
+    input_path = luigi.Parameter()
+    output_path = luigi.Parameter()
+    max_species = luigi.IntParameter(default=11255)
+    shuffle_partitions = luigi.IntParameter(default=200)
+
+    def output(self):
+        return luigi.LocalTarget(f"{self.output_path}/predictions.csv")
+
+    def _collect_sparse_labels(self, array):
+        """Turn a list of numbers into a sparse vector."""
+
+        @F.udf(VectorUDT())
+        def func(array):
+            if not array:
+                return SparseVector(self.max_species, [])
+            return SparseVector(self.max_species, sorted(Counter(array).items()))
+
+        return func(array)
+
+    def _load(self, spark):
+        df = spark.read.parquet(self.input_path)
+        # now we can convert this into a multi-label problem by surveyId
+        return (
+            df.groupBy("surveyId")
+            .agg(
+                F.mean("lat_proj").alias("lat_proj"),
+                F.mean("lon_proj").alias("lon_proj"),
+                self._collect_sparse_labels(F.collect_list("speciesId")).alias(
+                    "labels_sp"
+                ),
+                F.sort_array(F.collect_set("speciesId")).alias("labels"),
+                F.first("dataset").alias("dataset"),
+            )
+            .withColumn("is_validation", F.rand(seed=42) < 0.1)
+        )
+
+    def _predictions_to_labels(self, array):
+        pass
+
+    def run(self):
+        with spark_resource(
+            **{"spark.sql.shuffle.partitions": self.shuffle_partitions},
+        ) as spark:
+            df = self._load(spark).where(F.col("dataset") != "po")
+            model = CrossValidatorModel.load(self.model_path)
+            result = (
+                model.transform(df)
+                # drop unnecessarily expensive columns
+                .drop(
+                    "features",
+                    "scaled_features",
+                    "labels_sp",
+                    "labels_dct",
+                    "probability",
+                )
+            ).cache()
+
+            # now to convert the prediction column...
+            result.printSchema()
+            result.show(vertical=True, n=1)
+
+            evaluator = MultilabelClassificationEvaluator(
+                labelCol="labels",
+                predictionCol="prediction",
+                metricName="microF1Measure",
+            )
+            with Timer() as train_timer:
+                f1 = evaluator.evaluate(result.where(F.col("dataset") == "pa_train"))
+
+            with maybe_gcs_target(f"{self.output_path}/perf.json").open("w") as f:
+                json.dump({"f1": f1, "time": train_timer.elapsed}, f)
+
+            # now write out the predictions to parquet and the final competition format
+            result.write.parquet(f"{self.output_path}/predictions", mode="overwrite")
+
+            # only write out the test data in the correct format
+            (
+                result.where(F.col("dataset") == "pa_test")
+                .select(
+                    F.col("surveyId").cast("integer"),
+                    F.array_join(F.col("prediction").cast("array<integer>"), " ").alias(
+                        "predictions"
+                    ),
+                )
+                .toPandas()
+                .to_csv(f"{self.output_path}/predictions.csv", index=False)
+            )
+
+            # write success
+            with self.output().open("w") as f:
+                f.write("")
+
+
 class Workflow(luigi.Task):
     remote_root = luigi.Parameter(default="gs://dsgt-clef-geolifeclef-2024/data")
     local_root = luigi.Parameter(default="/mnt/data/geolifeclef-2024/data")
@@ -163,27 +262,36 @@ class Workflow(luigi.Task):
             }
         )
         yield [
-            FitMultiLabelModel(
-                k=1000,
-                multilabel_strategy=strategy,
-                num_folds=3,
-                labels_dim=labels_dim,
-                input_path=f"{self.local_root}/processed/metadata_clean/v1",
-                output_path=f"{self.local_root}/models/xgboost_multilabel_dct_{self.device}_{labels_dim}/v1_test",
-                **params,
-            )
+            [
+                FitMultiLabelModel(
+                    k=1000,
+                    multilabel_strategy=strategy,
+                    num_folds=3,
+                    labels_dim=labels_dim,
+                    input_path=f"{self.local_root}/processed/metadata_clean/v1",
+                    output_path=f"{self.local_root}/models/xgboost_multilabel_dct_{self.device}_{labels_dim}/v1_test",
+                    **params,
+                )
+            ]
             for strategy in ["threshold"]
             for labels_dim in [1, 2]
         ]
         yield [
-            FitMultiLabelModel(
-                multilabel_strategy=strategy,
-                num_folds=3,
-                labels_dim=labels_dim,
-                input_path=f"{self.local_root}/processed/metadata_clean/v1",
-                output_path=f"{self.local_root}/models/xgboost_multilabel_dct_{self.device}_{labels_dim}/v1",
-                **params,
-            )
+            [
+                FitMultiLabelModel(
+                    multilabel_strategy=strategy,
+                    num_folds=3,
+                    labels_dim=labels_dim,
+                    input_path=f"{self.local_root}/processed/metadata_clean/v1",
+                    output_path=f"{self.local_root}/models/xgboost_multilabel_dct_{self.device}_{labels_dim}/v1",
+                    **params,
+                ),
+                MakePrediction(
+                    model_path=f"{self.local_root}/models/xgboost_multilabel_dct_{self.device}_{labels_dim}/v1/model",
+                    input_path=f"{self.local_root}/processed/metadata_clean/v1",
+                    output_path=f"{self.local_root}/models/xgboost_multilabel_dct_{self.device}_{labels_dim}/v1/predictions",
+                ),
+            ]
             for strategy in ["threshold"]
             for labels_dim in [1, 2]
         ]
