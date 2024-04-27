@@ -46,7 +46,7 @@ class FitMultiLabelModel(BaseFitModel):
         @F.udf(VectorUDT())
         def func(array):
             if not array:
-                return SparseVector(self.max_species)
+                return SparseVector(self.max_species, [])
             return SparseVector(self.max_species, sorted(Counter(array).items()))
 
         return func(array)
