@@ -6,6 +6,7 @@ from collections import Counter
 import luigi
 import numpy as np
 from contexttimer import Timer
+from pynndescent import NNDescent
 from pyspark.ml import Pipeline, PipelineModel
 from pyspark.ml.evaluation import MultilabelClassificationEvaluator
 from pyspark.ml.feature import DCT, StandardScaler, VectorAssembler, VectorSlicer
@@ -13,6 +14,9 @@ from pyspark.ml.functions import vector_to_array
 from pyspark.ml.linalg import SparseVector, VectorUDT
 from pyspark.ml.regression import LinearRegression
 from pyspark.ml.tuning import CrossValidator, CrossValidatorModel, ParamGridBuilder
+from pyspark.mllib.linalg import Vectors
+from pyspark.mllib.linalg.distributed import RowMatrix
+from pyspark.sql import Row
 from pyspark.sql import functions as F
 from xgboost.spark import SparkXGBRegressor
 
@@ -137,6 +141,199 @@ class FitMultiLabelModel(BaseFitModel):
             labelCol="labels",
             metricName="microF1Measure",
         )
+
+
+def _collect_sparse_labels(array):
+    """Turn a list of numbers into a sparse vector."""
+    max_species = 11255
+
+    @F.udf(VectorUDT())
+    def func(array):
+        if not array:
+            return SparseVector(max_species, [])
+        return SparseVector(max_species, sorted(Counter(array).items()))
+
+    return func(array)
+
+
+class FitSVDMultiLabelModel(luigi.Task):
+    input_path = luigi.Parameter()
+    output_path = luigi.Parameter()
+    k_neighbors = luigi.IntParameter(default=15)
+    sample = luigi.OptionalFloatParameter()
+
+    def output(self):
+        return luigi.LocalTarget(f"{self.output_path}/_SUCCESS")
+
+    def run(self):
+        with spark_resource(memory="24g") as spark:
+            self._run(spark)
+
+    def _pipeline(self):
+        return Pipeline(
+            stages=[
+                VectorAssembler(
+                    inputCols=["lat_proj", "lon_proj"], outputCol="features"
+                ),
+                StandardScaler(inputCol="features", outputCol="features_scaled"),
+                *[
+                    SparkXGBRegressor(
+                        features_col="features_scaled",
+                        label_col=f"labels_svd_{i:03d}",
+                        prediction_col=f"prediction_{i:03d}",
+                        num_workers=os.cpu_count(),
+                        early_stopping_rounds=10,
+                        validation_indicator_col="is_validation",
+                        multi_strategy="multi_output_tree",
+                    )
+                    for i in range(2)
+                ],
+                VectorAssembler(
+                    inputCols=[f"prediction_{i:03d}" for i in range(2)],
+                    outputCol="prediction",
+                ),
+            ]
+        )
+
+    def _run(self, spark):
+        metadata = spark.read.parquet(self.input_path)
+        df = (
+            metadata.groupBy("surveyId")
+            .agg(
+                F.mean("lat_proj").alias("lat_proj"),
+                F.mean("lon_proj").alias("lon_proj"),
+                _collect_sparse_labels(F.collect_list("speciesId")).alias("labels_sp"),
+                F.sort_array(F.collect_set("speciesId")).alias("labels"),
+                F.first("dataset").alias("dataset"),
+            )
+            .withColumn("sample_id", F.crc32(F.col("surveyId").cast("string")) % 100)
+            .withColumn("is_validation", F.col("sample_id") < 10)
+            .withColumn("is_train", F.col("sample_id") < 80)
+            .withColumn("is_test", F.col("sample_id") >= 80)
+            .orderBy("surveyId")
+            .cache()
+        )
+        if self.sample is not None:
+            df = df.where(F.col("dataset") != "po")
+            df = df.sample(self.sample).orderBy("surveyId").cache()
+
+        train = df.where(F.col("dataset") != "pa_test")
+        scaled_labels = (
+            StandardScaler(
+                inputCol="labels_sp",
+                outputCol="labels_centered",
+                withStd=False,
+                withMean=True,
+            )
+            .fit(train)
+            .transform(train)
+            .cache()
+        )
+        print(f"scaled_labels: {scaled_labels.count()}")
+        X = RowMatrix(
+            scaled_labels.rdd.map(lambda x: Vectors.fromML(x.labels_centered)).cache()
+        )
+        with Timer() as t_svd:
+            svd = X.computeSVD(2, computeU=True)
+            print(svd.s)
+            print(svdgit.V.toArray().shape)
+            print(svd.U.rows)
+
+        print(f"svd computed in {t_svd.elapsed:.2f}s")
+
+        labels_svd = (
+            svd.U.rows.zipWithIndex()
+            .map(lambda x: (x[1], x[0]))
+            .toDF(["index", "labels_svd"])
+            .join(
+                df.select("surveyId")
+                .rdd.zipWithIndex()
+                .map(lambda x: (x[1], x[0].surveyId))
+                .toDF(["index", "surveyId"]),
+                on="index",
+            )
+        )
+        labels_svd = (
+            ExtractLabelsFromVector(
+                inputCol="labels_svd",
+                outputColPrefix="labels_svd",
+                indexDim=2,
+            )
+            .transform(labels_svd)
+            .cache()
+        )
+
+        full_train = train.join(labels_svd, on="surveyId")
+        pipeline = self._pipeline()
+        model = pipeline.fit(full_train.where("is_train"))
+        predictions = (
+            model.transform(df)
+            .drop("labels_sp", "labels_sp_scaled")
+            .orderBy("surveyId")
+            .cache()
+        )
+        predictions.printSchema()
+
+        U = np.stack(labels_svd.toPandas().labels_svd)
+        index = NNDescent(U, metric="cosine")
+
+        pdf = predictions.select(
+            vector_to_array("prediction").alias("prediction")
+        ).toPandas()
+        # np.stack(pdf.prediction.values)
+        idx, _ = index.query(np.stack(pdf.prediction.values), k=self.k_neighbors)
+
+        pred_labels = (
+            spark.createDataFrame(
+                [
+                    Row(
+                        index=i,
+                        pred_index=int(row[0]),
+                    )
+                    for i, row in enumerate(idx)
+                ]
+            )
+            .join(
+                predictions.select("index", "surveyId", "labels", "dataset"),
+                on="index",
+            )
+            .join(
+                predictions.select(
+                    F.col("index").alias("pred_index"),
+                    F.col("labels").alias("pred_labels"),
+                ),
+                on="pred_index",
+            )
+        )
+
+        with Timer() as t:
+            res = MultilabelClassificationEvaluator(
+                predictionCol="pred_labels",
+                labelCol="labels",
+                metricName="microF1Measure",
+            ).evaluate(pred_labels.where(F.col("dataset") == "pa_train"))
+
+        # write out stats
+        with open(f"{self.output_path}/perf.json", "w") as f:
+            json.dump({"f1": res, "time": t.elapsed, "time_svd": t_svd}, f)
+
+        # now write out the predictions to parquet and the final competition format
+        # only write out the test data in the correct format
+        (
+            pred_labels.where(F.col("dataset") == "pa_test")
+            .select(
+                F.col("surveyId").cast("integer"),
+                F.array_join(F.col("prediction").cast("array<integer>"), " ").alias(
+                    "predictions"
+                ),
+            )
+            .toPandas()
+            .to_csv(f"{self.output_path}/predictions.csv", index=False)
+        )
+
+        # write success
+        with self.output().open("w") as f:
+            f.write("")
 
 
 class MakePrediction(luigi.Task):
@@ -295,6 +492,21 @@ class Workflow(luigi.Task):
             for strategy in ["threshold"]
             for labels_dim in [1, 2]
         ]
+
+        # v2 - SVD
+        yield [
+            FitSVDMultiLabelModel(
+                sample=0.01,
+                input_path=f"{self.local_root}/processed/metadata_clean/v1",
+                output_path=f"{self.local_root}/models/xgboost_multilabel_svd/v1_test",
+            )
+        ]
+        # yield [
+        #     FitSVDMultiLabelModel(
+        #         input_path=f"{self.local_root}/processed/metadata_clean/v1",
+        #         output_path=f"{self.local_root}/models/xgboost_multilabel_svd/v1",
+        #     ),
+        # ]
 
 
 if __name__ == "__main__":
