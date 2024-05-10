@@ -109,9 +109,10 @@ class Workflow(luigi.Task):
             #   - 22 it/s on epoch 0, 80 it/s on epoch 1+
             # v3 - remove sigmoid layer
             # v4 - proper early stopping and use weights
+            # v5 - weights are only from the pa_train set
             TrainMultiLabelClassifier(
                 input_path=f"{self.local_root}/processed/metadata_clean/v2",
-                output_path=f"{self.local_root}/models/multilabel_classifier/v4",
+                output_path=f"{self.local_root}/models/multilabel_classifier/v5",
             )
         ]
 

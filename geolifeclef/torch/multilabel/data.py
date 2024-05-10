@@ -62,7 +62,7 @@ class GeoSpatialDataModel(pl.LightningDataModule):
         self.workers_count = workers_count
 
         df = spark.read.parquet(self.input_path)
-        if self.pa_only:
+        if pa_only:
             df = df.where("dataset = 'pa_train'")
         self.df = df.cache()
 
