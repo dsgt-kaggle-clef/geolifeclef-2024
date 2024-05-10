@@ -37,12 +37,15 @@ class TrainMultiLabelClassifier(luigi.Task):
                 batch_size=self.batch_size,
                 num_partitions=self.num_partitions,
             )
+            weights = data_module.compute_weights()
             data_module.setup()
 
             # get parameters for the model
             row = data_module.train_data.first()
             num_features = int(len(row.features))
             num_classes = int(len(row.label))
+
+            assert weights.shape[0] == num_classes, (weights.shape, num_classes)
 
             # model module
             model = MultiLabelClassifier(num_features, num_classes)
@@ -62,10 +65,12 @@ class TrainMultiLabelClassifier(luigi.Task):
                     },
                 ),
                 callbacks=[
-                    EarlyStopping(monitor="val_loss", mode="min"),
+                    EarlyStopping(monitor="val_loss", mode="min", min_delta=1e-4),
+                    EarlyStopping(monitor="val_f1", mode="max"),
                     ModelCheckpoint(
                         dirpath=os.path.join(self.output_path, "checkpoints"),
-                        monitor="val_loss",
+                        monitor="val_f1",
+                        mode="max",
                         save_last=True,
                     ),
                 ],
@@ -102,9 +107,11 @@ class Workflow(luigi.Task):
             # v1 - first model, 70 it/s on epoch 1+
             # v2 - set 90/10 train/valid split, increase number of partitions, 20 epochs max
             #   - 22 it/s on epoch 0, 80 it/s on epoch 1+
+            # v3 - remove sigmoid layer
+            # v4 - proper early stopping and use weights
             TrainMultiLabelClassifier(
                 input_path=f"{self.local_root}/processed/metadata_clean/v2",
-                output_path=f"{self.local_root}/models/multilabel_classifier/v2",
+                output_path=f"{self.local_root}/models/multilabel_classifier/v4",
             )
         ]
 

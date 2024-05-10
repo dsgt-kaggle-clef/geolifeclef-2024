@@ -24,7 +24,6 @@ class MultiLabelClassifier(pl.LightningModule):
             nn.Linear(num_features, hidden_layer_size),
             nn.ReLU(inplace=True),
             nn.Linear(hidden_layer_size, num_classes),
-            nn.Sigmoid(),
         )
 
         self.learning_rate = 2e-3

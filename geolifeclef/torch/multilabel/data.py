@@ -2,7 +2,9 @@ import os
 from collections import Counter
 from pathlib import Path
 
+import numpy as np
 import pytorch_lightning as pl
+import torch
 from petastorm.spark import SparkDatasetConverter, make_spark_converter
 from pyspark.ml import Pipeline
 from pyspark.ml.feature import VectorAssembler
@@ -41,6 +43,7 @@ class GeoSpatialDataModel(pl.LightningDataModule):
         spark,
         input_path,
         feature_col=["lat_proj", "lon_proj"],
+        pa_only=True,
         batch_size=32,
         num_partitions=32,
         workers_count=os.cpu_count() // 2,
@@ -58,12 +61,15 @@ class GeoSpatialDataModel(pl.LightningDataModule):
         self.num_partitions = num_partitions
         self.workers_count = workers_count
 
-    def _load(self, spark):
+        df = spark.read.parquet(self.input_path)
+        if self.pa_only:
+            df = df.where("dataset = 'pa_train'")
+        self.df = df.cache()
+
+    def _load(self):
         # now we can convert this into a multi-label problem by surveyId
         return self._prepare_dataframe(
-            spark.read.parquet(self.input_path)
-            .where("dataset = 'pa_train'")
-            .groupBy("surveyId")
+            self.df.groupBy("surveyId")
             .agg(
                 F.mean("lat_proj").alias("lat_proj"),
                 F.mean("lon_proj").alias("lon_proj"),
@@ -92,8 +98,25 @@ class GeoSpatialDataModel(pl.LightningDataModule):
             vector_to_array("labels_sp").cast("array<boolean>").alias("label"),
         )
 
+    def compute_weights(self):
+        df = self.df
+        num_classes = int(
+            df.select(F.max("speciesId").alias("num_classes")).first().num_classes + 1
+        )
+        counts = (
+            df.where("speciesId is not null")
+            .groupBy("speciesId")
+            .agg(F.count("surveyId").alias("n"))
+            .orderBy("speciesId")
+            .collect()
+        )
+        vec = torch.ones(num_classes)
+        for count in counts:
+            vec[int(count.speciesId)] += count.n
+        return vec / vec.sum()
+
     def setup(self, stage=None):
-        df = self._load(self.spark).cache()
+        df = self._load().cache()
         self.train_data = (
             df.where("sample_id < 90").repartition(self.num_partitions).cache()
         )
