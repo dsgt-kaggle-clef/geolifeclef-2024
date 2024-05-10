@@ -2,6 +2,7 @@ from typing import Optional
 
 import pytorch_lightning as pl
 import torch
+import torch.nn.functional
 from torch import nn
 from torchmetrics.classification import MultilabelF1Score
 
@@ -18,30 +19,33 @@ class MultiLabelClassifier(pl.LightningModule):
         self.num_features = num_features
         self.num_classes = num_classes
         self.weights = weights or torch.ones(num_classes)
+        # ensure weights are on the same device as the model
+        self.weights = self.weights.to(self.device)
         self.save_hyperparameters()
         self.model = nn.Sequential(
             nn.Linear(num_features, hidden_layer_size),
             nn.ReLU(inplace=True),
             nn.Linear(hidden_layer_size, num_classes),
+            nn.Sigmoid(),
         )
 
         self.learning_rate = 0.002
-        self.f1_score = MultilabelF1Score(num_classes=num_classes, average="micro")
+        self.f1_score = MultilabelF1Score(num_classes, average="micro")
 
     def forward(self, x):
-        return torch.multilabel_soft_margin_loss(self.model(x), dim=1)
+        return self.model(x)
 
     def configure_optimizers(self):
         optimizer = torch.optim.Adam(self.parameters(), lr=self.learning_rate)
         return optimizer
 
     def _run_step(self, batch, batch_idx, step_name):
-        x, y = batch["features"], batch["label"]
+        x, y = batch["features"], batch["label"].to_dense()
         logits = self(x)
-        loss = torch.nn.functional.nll_loss(logits, y)
+        loss = torch.nn.functional.multilabel_soft_margin_loss(logits, y)
         self.log(f"{step_name}_loss", loss, prog_bar=True)
         self.log(
-            f"{step_name}_g1",
+            f"{step_name}_f1",
             self.f1_score(logits, y),
             on_step=False,
             on_epoch=True,

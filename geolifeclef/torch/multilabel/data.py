@@ -3,7 +3,6 @@ from collections import Counter
 from pathlib import Path
 
 import pytorch_lightning as pl
-import torch
 from petastorm.spark import SparkDatasetConverter, make_spark_converter
 from pyspark.ml import Pipeline
 from pyspark.ml.feature import VectorAssembler
@@ -29,9 +28,10 @@ def _collect_sparse_labels(array):
 # create a transform to convert a list of numbers into a sparse tensor
 class ToSparseTensor(v2.Transform):
     def forward(self, batch):
+        features, label = batch["features"], batch["label"]
         return {
-            "features": batch["features"],
-            "labels": batch["labels"].to_sparse(),
+            "features": features.to(features.device),
+            "label": label.to_sparse().to(label.device),
         }
 
 
@@ -43,7 +43,7 @@ class GeoSpatialDataModel(pl.LightningDataModule):
         feature_col=["lat_proj", "lon_proj"],
         batch_size=32,
         num_partitions=32,
-        workers_count=os.cpu_count(),
+        workers_count=os.cpu_count() // 2,
         cache_dir="file:///mnt/data/tmp",
     ):
         super().__init__()
@@ -70,7 +70,6 @@ class GeoSpatialDataModel(pl.LightningDataModule):
                 _collect_sparse_labels(
                     F.collect_list("speciesId").cast("array<short>")
                 ).alias("labels_sp"),
-                # F.sort_array(F.collect_set("speciesId")).alias("labels"),
             )
             .withColumn("sample_id", F.crc32(F.col("surveyId").cast("string")) % 100)
             .cache(),
@@ -90,8 +89,7 @@ class GeoSpatialDataModel(pl.LightningDataModule):
         res = pipeline.fit(df).transform(df)
         return res.select(
             vector_to_array("features").alias("features"),
-            # "labels",
-            vector_to_array("labels_sp").cast("array<short>").alias("labels"),
+            vector_to_array("labels_sp").cast("array<boolean>").alias("label"),
         )
 
     def setup(self, stage=None):
@@ -104,7 +102,7 @@ class GeoSpatialDataModel(pl.LightningDataModule):
         )
         self.converter_train = make_spark_converter(self.train_data)
         self.converter_valid = make_spark_converter(self.valid_data)
-        self.transform = ToSparseTensor()
+        self.transform = v2.Compose([ToSparseTensor()])
 
     def _dataloader(self, converter):
         with converter.make_torch_dataloader(

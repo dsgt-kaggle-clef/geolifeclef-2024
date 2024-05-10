@@ -22,6 +22,7 @@ class TrainMultiLabelClassifier(luigi.Task):
     input_path = luigi.Parameter()
     output_path = luigi.Parameter()
     batch_size = luigi.IntParameter(default=32)
+    num_partitions = luigi.IntParameter(default=8)
 
     def output(self):
         # save the model run
@@ -34,6 +35,7 @@ class TrainMultiLabelClassifier(luigi.Task):
                 spark,
                 self.input_path,
                 batch_size=self.batch_size,
+                num_partitions=self.num_partitions,
             )
             data_module.setup()
 
@@ -49,7 +51,7 @@ class TrainMultiLabelClassifier(luigi.Task):
                 max_epochs=10,
                 accelerator="gpu" if torch.cuda.is_available() else "cpu",
                 reload_dataloaders_every_n_epochs=1,
-                default_root_dir=self.default_root_dir,
+                default_root_dir=self.output_path,
                 logger=WandbLogger(
                     project="geolifeclef-2024",
                     name=Path(self.output_path).name,
