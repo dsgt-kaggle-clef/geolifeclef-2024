@@ -21,29 +21,28 @@ from .base_tasks import CleanMetadata
 class TrainMultiLabelClassifier(luigi.Task):
     input_path = luigi.Parameter()
     output_path = luigi.Parameter()
-    batch_size = luigi.IntParameter(default=32)
-    num_partitions = luigi.IntParameter(default=32)
+    batch_size = luigi.IntParameter(default=64)
+    num_partitions = luigi.IntParameter(default=200)
 
     def output(self):
         # save the model run
         return maybe_gcs_target(f"{self.output_path}/checkpoints/last.ckpt")
 
     def run(self):
-        with spark_resource() as spark:
+        with spark_resource(memory="24g") as spark:
             # data module
             data_module = GeoSpatialDataModel(
                 spark,
                 self.input_path,
                 batch_size=self.batch_size,
                 num_partitions=self.num_partitions,
+                pa_only=False,
             )
             weights = data_module.compute_weights()
             data_module.setup()
 
             # get parameters for the model
-            row = data_module.train_data.first()
-            num_features = int(len(row.features))
-            num_classes = int(len(row.label))
+            num_features, num_classes = data_module.get_shape()
 
             assert weights.shape[0] == num_classes, (weights.shape, num_classes)
 
@@ -110,9 +109,10 @@ class Workflow(luigi.Task):
             # v3 - remove sigmoid layer
             # v4 - proper early stopping and use weights
             # v5 - weights are only from the pa_train set
+            # v6 - set pa_only to false
             TrainMultiLabelClassifier(
                 input_path=f"{self.local_root}/processed/metadata_clean/v2",
-                output_path=f"{self.local_root}/models/multilabel_classifier/v5",
+                output_path=f"{self.local_root}/models/multilabel_classifier/v6",
             )
         ]
 

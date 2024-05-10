@@ -47,9 +47,7 @@ def test_classifier_validation_model(tmp_path, spark, metadata_v2, device):
     data_module.setup()
 
     # get parameters for the model
-    row = data_module.train_data.first()
-    num_features = int(len(row.features))
-    num_classes = int(len(row.label))
+    num_features, num_classes = data_module.get_shape()
     model = MultiLabelClassifier(num_features, num_classes)
 
     trainer = pl.Trainer(

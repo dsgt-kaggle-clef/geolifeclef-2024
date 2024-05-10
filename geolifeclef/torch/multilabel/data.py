@@ -67,22 +67,33 @@ class GeoSpatialDataModel(pl.LightningDataModule):
         self.df = df.cache()
 
     def _load(self):
-        # now we can convert this into a multi-label problem by surveyId
-        return self._prepare_dataframe(
-            self.df.groupBy("surveyId")
+        # create a smaller subset of rows to keep
+        # only keep rows where there are more than 5 species
+        # this should bring us down from 3.9m rows to 150k rows, but doesn't cover
+        # all of the species
+        subset = (
+            self.df.where("dataset='po'")
+            .groupBy("surveyId")
+            .agg(F.countDistinct("speciesId").alias("n_species"))
+            .where("n_species > 5")
+            .select("surveyId")
+        ).union(self.df.where("dataset='pa_train'").select("surveyId").distinct())
+
+        return (
+            self.df.join(subset, on="surveyId")
+            .groupBy("surveyId")
             .agg(
                 F.mean("lat_proj").alias("lat_proj"),
                 F.mean("lon_proj").alias("lon_proj"),
                 _collect_sparse_labels(
                     F.collect_list("speciesId").cast("array<short>")
                 ).alias("labels_sp"),
+                F.first("dataset").alias("dataset"),
             )
             .withColumn("sample_id", F.crc32(F.col("surveyId").cast("string")) % 100)
-            .cache(),
-            self.num_partitions,
         )
 
-    def _prepare_dataframe(self, df, partitions=32):
+    def _prepare_dataframe(self, df):
         """Prepare the DataFrame for training by ensuring correct types and repartitioning"""
         pipeline = Pipeline(
             stages=[
@@ -117,15 +128,28 @@ class GeoSpatialDataModel(pl.LightningDataModule):
 
     def setup(self, stage=None):
         df = self._load().cache()
-        self.train_data = (
-            df.where("sample_id < 90").repartition(self.num_partitions).cache()
-        )
         self.valid_data = (
-            df.where("sample_id >= 90").repartition(self.num_partitions).cache()
+            df.where("sample_id >= 90 and dataset='pa_train'")
+            .repartition(self.num_partitions)
+            .cache()
         )
-        self.converter_train = make_spark_converter(self.train_data)
-        self.converter_valid = make_spark_converter(self.valid_data)
+        self.train_data = (
+            df.join(self.valid_data.select("surveyId"), on="surveyId", how="left_anti")
+            .repartition(self.num_partitions)
+            .cache()
+        )
+
+        self.converter_train = make_spark_converter(
+            self._prepare_dataframe(self.train_data)
+        )
+        self.converter_valid = make_spark_converter(
+            self._prepare_dataframe(self.valid_data)
+        )
         self.transform = v2.Compose([ToSparseTensor()])
+
+    def get_shape(self):
+        row = self._prepare_dataframe(self.valid_data).first()
+        return int(len(row.features)), int(len(row.label))
 
     def _dataloader(self, converter):
         with converter.make_torch_dataloader(
