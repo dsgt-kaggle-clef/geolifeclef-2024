@@ -6,6 +6,7 @@ import luigi
 import luigi.contrib.gcs
 import pytorch_lightning as pl
 import torch
+from pytorch_lightning.callbacks import LearningRateFinder
 from pytorch_lightning.callbacks.early_stopping import EarlyStopping
 from pytorch_lightning.callbacks.model_checkpoint import ModelCheckpoint
 from pytorch_lightning.loggers import WandbLogger
@@ -72,6 +73,7 @@ class TrainMultiLabelClassifier(luigi.Task):
                         mode="max",
                         save_last=True,
                     ),
+                    LearningRateFinder(),
                 ],
             )
             trainer.fit(model, data_module)
@@ -109,10 +111,11 @@ class Workflow(luigi.Task):
             # v3 - remove sigmoid layer
             # v4 - proper early stopping and use weights
             # v5 - weights are only from the pa_train set
-            # v6 - set pa_only to false
+            # v6 - set pa_only to false, also reduce the number of train samples incorporated
+            # v7 - autotuning
             TrainMultiLabelClassifier(
                 input_path=f"{self.local_root}/processed/metadata_clean/v2",
-                output_path=f"{self.local_root}/models/multilabel_classifier/v6",
+                output_path=f"{self.local_root}/models/multilabel_classifier/v7",
             )
         ]
 

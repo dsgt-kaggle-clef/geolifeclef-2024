@@ -19,14 +19,13 @@ class MultiLabelClassifier(pl.LightningModule):
         self.num_features = num_features
         self.num_classes = num_classes
         self.weights = weights or torch.ones(num_classes)
+        self.learning_rate = 2e-3
         self.save_hyperparameters()
         self.model = nn.Sequential(
             nn.Linear(num_features, hidden_layer_size),
             nn.ReLU(inplace=True),
             nn.Linear(hidden_layer_size, num_classes),
         )
-
-        self.learning_rate = 2e-3
         self.f1_score = MultilabelF1Score(num_classes, average="micro")
 
     def forward(self, x):
