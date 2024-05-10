@@ -22,11 +22,11 @@ class TrainMultiLabelClassifier(luigi.Task):
     input_path = luigi.Parameter()
     output_path = luigi.Parameter()
     batch_size = luigi.IntParameter(default=32)
-    num_partitions = luigi.IntParameter(default=8)
+    num_partitions = luigi.IntParameter(default=32)
 
     def output(self):
         # save the model run
-        return maybe_gcs_target(f"{self.output_path}/_SUCCESS")
+        return maybe_gcs_target(f"{self.output_path}/checkpoints/last.ckpt")
 
     def run(self):
         with spark_resource() as spark:
@@ -48,7 +48,7 @@ class TrainMultiLabelClassifier(luigi.Task):
             model = MultiLabelClassifier(num_features, num_classes)
 
             trainer = pl.Trainer(
-                max_epochs=10,
+                max_epochs=20,
                 accelerator="gpu" if torch.cuda.is_available() else "cpu",
                 reload_dataloaders_every_n_epochs=1,
                 default_root_dir=self.output_path,
@@ -71,10 +71,6 @@ class TrainMultiLabelClassifier(luigi.Task):
                 ],
             )
             trainer.fit(model, data_module)
-
-        # write the output
-        with self.output().open("w") as f:
-            f.write("")
 
 
 class Workflow(luigi.Task):
@@ -103,9 +99,12 @@ class Workflow(luigi.Task):
 
         yield [
             # these runs are meant to validate that the pipeline works as expected before expensive runs
+            # v1 - first model, 70 it/s on epoch 1+
+            # v2 - set 90/10 train/valid split, increase number of partitions, 20 epochs max
+            #   - 22 it/s on epoch 0, 80 it/s on epoch 1+
             TrainMultiLabelClassifier(
                 input_path=f"{self.local_root}/processed/metadata_clean/v2",
-                output_path=f"{self.local_root}/models/multilabel_classifier/v1",
+                output_path=f"{self.local_root}/models/multilabel_classifier/v2",
             )
         ]
 

@@ -19,8 +19,6 @@ class MultiLabelClassifier(pl.LightningModule):
         self.num_features = num_features
         self.num_classes = num_classes
         self.weights = weights or torch.ones(num_classes)
-        # ensure weights are on the same device as the model
-        self.weights = self.weights.to(self.device)
         self.save_hyperparameters()
         self.model = nn.Sequential(
             nn.Linear(num_features, hidden_layer_size),
@@ -29,7 +27,7 @@ class MultiLabelClassifier(pl.LightningModule):
             nn.Sigmoid(),
         )
 
-        self.learning_rate = 0.002
+        self.learning_rate = 2e-3
         self.f1_score = MultilabelF1Score(num_classes, average="micro")
 
     def forward(self, x):
@@ -42,7 +40,9 @@ class MultiLabelClassifier(pl.LightningModule):
     def _run_step(self, batch, batch_idx, step_name):
         x, y = batch["features"], batch["label"].to_dense()
         logits = self(x)
-        loss = torch.nn.functional.multilabel_soft_margin_loss(logits, y)
+        loss = torch.nn.functional.multilabel_soft_margin_loss(
+            logits, y, weight=self.weights.to(y.device)
+        )
         self.log(f"{step_name}_loss", loss, prog_bar=True)
         self.log(
             f"{step_name}_f1",

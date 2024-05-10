@@ -95,10 +95,10 @@ class GeoSpatialDataModel(pl.LightningDataModule):
     def setup(self, stage=None):
         df = self._load(self.spark).cache()
         self.train_data = (
-            df.where("sample_id < 80").repartition(self.num_partitions).cache()
+            df.where("sample_id < 90").repartition(self.num_partitions).cache()
         )
         self.valid_data = (
-            df.where("sample_id >= 80").repartition(self.num_partitions).cache()
+            df.where("sample_id >= 90").repartition(self.num_partitions).cache()
         )
         self.converter_train = make_spark_converter(self.train_data)
         self.converter_valid = make_spark_converter(self.valid_data)
