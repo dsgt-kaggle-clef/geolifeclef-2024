@@ -61,8 +61,8 @@ class XGBoostSplitWorkflows(luigi.Task):
 
         yield [
             FitXGBoostModel(
-                k=3,
-                num_workers=4,
+                num_workers=8,
+                subsample=0.1,
                 multilabel_strategy=strategy,
                 input_path=f"{self.local_root}/processed/metadata_split/log_bin_2=10",
                 output_path=f"{self.local_root}/models/baseline_xgboost_{strategy}/log_bin_2=10",
