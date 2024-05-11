@@ -201,6 +201,24 @@ class ConsolidateParquet(luigi.Task):
             )
 
 
+class RepartitionParquet(luigi.Task):
+    input_path = luigi.Parameter()
+    output_path = luigi.Parameter()
+    num_partitions = luigi.IntParameter(default=64)
+
+    def output(self):
+        return luigi.contrib.gcs.GCSTarget(f"{self.output_path}/_SUCCESS")
+
+    def run(self):
+        with spark_resource() as spark:
+            df = spark.read.parquet(self.input_path)
+            df.printSchema()
+            print(f"row count: {df.count()}")
+            df.coalesce(self.num_partitions).write.parquet(
+                self.output_path, mode="overwrite"
+            )
+
+
 def parse_args():
     parser = ArgumentParser()
     parser.add_argument("--test-mode", action="store_true")
