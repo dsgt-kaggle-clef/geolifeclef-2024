@@ -4,7 +4,7 @@ numpy
 pandas
 matplotlib
 pyspark >= 3.4.0
-pyarrow >= 4.0.0
+# pyarrow >= 4.0.0
 imageio
 scikit-learn
 torch
@@ -12,6 +12,12 @@ torchvision
 transformers
 xgboost
 node2vec-fugue @ git+https://github.com/graph-embedding/node2vec.git
+pytorch-lightning
+torchmetrics
+petastorm
+# this is a silly-limitation, would be nice to get rid of petastorm instead
+pyarrow==10.0.1
+wandb
 
 tqdm
 contexttimer
@@ -27,3 +33,4 @@ pyproj
 jupyterlab
 black
 pre-commit
+pytest
