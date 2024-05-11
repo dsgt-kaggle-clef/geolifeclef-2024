@@ -16,6 +16,7 @@ import luigi.contrib.gcs
 import pandas as pd
 import torch
 import tqdm
+from pyspark.sql import functions as F
 from scipy.fftpack import dctn
 
 from geolifeclef.loaders.GLC23Datasets import PatchesDataset
@@ -211,10 +212,18 @@ class RepartitionParquet(luigi.Task):
 
     def run(self):
         with spark_resource() as spark:
-            df = spark.read.parquet(self.input_path)
+            df = spark.read.parquet(self.input_path).select(
+                "*",
+                F.replace(
+                    F.regexp_extract(F.input_file_name(), r"tiles.*?/(.*?)/.*", 1),
+                    F.lit("-"),
+                    F.lit("_"),
+                ).alias("dataset"),
+                F.input_file_name().alias("file_path"),
+            )
             df.printSchema()
             print(f"row count: {df.count()}")
-            df.coalesce(self.num_partitions).write.parquet(
+            df.repartition(self.num_partitions).write.parquet(
                 self.output_path, mode="overwrite"
             )
 
@@ -222,6 +231,9 @@ class RepartitionParquet(luigi.Task):
 def parse_args():
     parser = ArgumentParser()
     parser.add_argument("--test-mode", action="store_true")
+    parser.add_argument(
+        "--scheduler-host", default="services.us-central1-a.c.dsgt-clef-2024.internal"
+    )
     return parser.parse_args()
 
 
@@ -276,8 +288,20 @@ if __name__ == "__main__":
                 )
             ]
         )
+
     luigi.build(
         tasks,
-        scheduler_host="services.us-central1-a.c.dsgt-clef-2024.internal",
+        scheduler_host=args.scheduler_host,
         workers=4,
+    )
+
+    luigi.build(
+        [
+            RepartitionParquet(
+                input_path="gs://dsgt-clef-geolifeclef-2024/data/intermediate/tiles/*/satellite/v3/",
+                output_path="gs://dsgt-clef-geolifeclef-2024/data/processed/tiles/po",
+            ),
+        ],
+        scheduler_host=args.scheduler_host,
+        workers=1,
     )
