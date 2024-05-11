@@ -94,6 +94,19 @@ class Workflow(luigi.Task):
                 "PresenceAbsenceSurveys",
             ]
         ]
+
+        # download satellite imagery
+        yield [
+            RsyncGCSFiles(
+                src_path=f"{self.remote_root}/processed/{name}",
+                dst_path=f"{self.local_root}/processed/{name}",
+            )
+            for name in [
+                "tiles/pa-train/satellite",
+                "tiles/pa-test/satellite",
+            ]
+        ]
+
         yield CleanMetadata(
             input_path=f"{self.local_root}/downloaded/2024",
             output_path=f"{self.local_root}/processed/metadata_clean/v2",
