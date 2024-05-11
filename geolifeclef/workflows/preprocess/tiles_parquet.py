@@ -5,7 +5,6 @@ usage:
 """
 
 import itertools
-import os
 import shutil
 from argparse import ArgumentParser
 from multiprocessing import Pool
@@ -16,7 +15,6 @@ import luigi.contrib.gcs
 import pandas as pd
 import torch
 import tqdm
-from pyspark.sql import functions as F
 from scipy.fftpack import dctn
 
 from geolifeclef.loaders.GLC23Datasets import PatchesDataset
@@ -202,32 +200,6 @@ class ConsolidateParquet(luigi.Task):
             )
 
 
-class RepartitionParquet(luigi.Task):
-    input_path = luigi.Parameter()
-    output_path = luigi.Parameter()
-    num_partitions = luigi.IntParameter(default=64)
-
-    def output(self):
-        return luigi.contrib.gcs.GCSTarget(f"{self.output_path}/_SUCCESS")
-
-    def run(self):
-        with spark_resource() as spark:
-            df = spark.read.parquet(self.input_path).select(
-                "*",
-                F.replace(
-                    F.regexp_extract(F.input_file_name(), r"tiles.*?/(.*?)/.*", 1),
-                    F.lit("-"),
-                    F.lit("_"),
-                ).alias("dataset"),
-                F.input_file_name().alias("file_path"),
-            )
-            df.printSchema()
-            print(f"row count: {df.count()}")
-            df.repartition(self.num_partitions).write.parquet(
-                self.output_path, mode="overwrite"
-            )
-
-
 def parse_args():
     parser = ArgumentParser()
     parser.add_argument("--test-mode", action="store_true")
@@ -293,15 +265,4 @@ if __name__ == "__main__":
         tasks,
         scheduler_host=args.scheduler_host,
         workers=4,
-    )
-
-    luigi.build(
-        [
-            RepartitionParquet(
-                input_path="gs://dsgt-clef-geolifeclef-2024/data/intermediate/tiles/*/satellite/v3/",
-                output_path="gs://dsgt-clef-geolifeclef-2024/data/processed/tiles/po",
-            ),
-        ],
-        scheduler_host=args.scheduler_host,
-        workers=1,
     )
