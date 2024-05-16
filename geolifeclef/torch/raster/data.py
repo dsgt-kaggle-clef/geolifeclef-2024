@@ -85,7 +85,7 @@ class RasterDataModel(pl.LightningDataModule):
             df = df.join(feature_df, on="surveyId")
         for col in self.feature_col:
             df = df.withColumn(col, array_to_vector(col))
-        return df.cache()
+        return df
 
     def _load_labels(self, df):
         return (
@@ -116,7 +116,7 @@ class RasterDataModel(pl.LightningDataModule):
         )
 
     def compute_weights(self):
-        df = self.df
+        df = self.spark.read.parquet(self.input_path)
         num_classes = int(
             df.select(F.max("speciesId").alias("num_classes")).first().num_classes + 1
         )

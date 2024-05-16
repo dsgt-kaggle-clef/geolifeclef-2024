@@ -18,7 +18,7 @@ class MultiLabelClassifier(pl.LightningModule):
         super().__init__()
         self.num_features = num_features
         self.num_classes = num_classes
-        self.weights = weights or torch.ones(num_classes)
+        self.weights = weights if weights is not None else torch.ones(num_classes)
         self.learning_rate = 2e-3
         self.save_hyperparameters()
         self.model = nn.Sequential(

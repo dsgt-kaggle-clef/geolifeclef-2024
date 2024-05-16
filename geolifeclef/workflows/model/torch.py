@@ -13,6 +13,8 @@ from pytorch_lightning.loggers import WandbLogger
 
 from geolifeclef.torch.multilabel.data import GeoSpatialDataModel
 from geolifeclef.torch.multilabel.model import MultiLabelClassifier
+from geolifeclef.torch.raster.data import RasterDataModel
+from geolifeclef.torch.raster.model import RasterClassifier
 from geolifeclef.utils import spark_resource
 
 from ..utils import RsyncGCSFiles, maybe_gcs_target
@@ -48,7 +50,7 @@ class TrainMultiLabelClassifier(luigi.Task):
             assert weights.shape[0] == num_classes, (weights.shape, num_classes)
 
             # model module
-            model = MultiLabelClassifier(num_features, num_classes)
+            model = MultiLabelClassifier(num_features, num_classes, weights=weights)
 
             trainer = pl.Trainer(
                 max_epochs=20,
@@ -57,9 +59,75 @@ class TrainMultiLabelClassifier(luigi.Task):
                 default_root_dir=self.output_path,
                 logger=WandbLogger(
                     project="geolifeclef-2024",
-                    name=Path(self.output_path).name,
+                    name="-".join(reversed(Path(self.output_path).parts[:-2:])),
                     save_dir=self.output_path,
                     config={
+                        "batch_size": self.batch_size,
+                        "input_path": self.input_path,
+                    },
+                ),
+                callbacks=[
+                    EarlyStopping(monitor="val_loss", mode="min", min_delta=1e-4),
+                    EarlyStopping(monitor="val_f1", mode="max"),
+                    ModelCheckpoint(
+                        dirpath=os.path.join(self.output_path, "checkpoints"),
+                        monitor="val_f1",
+                        mode="max",
+                        save_last=True,
+                    ),
+                    LearningRateFinder(),
+                ],
+            )
+            trainer.fit(model, data_module)
+
+
+class TrainRasterClassifier(luigi.Task):
+    input_path = luigi.Parameter()
+    feature_paths = luigi.ListParameter()
+    feature_cols = luigi.ListParameter()
+    output_path = luigi.Parameter()
+    batch_size = luigi.IntParameter(default=64)
+    num_partitions = luigi.IntParameter(default=200)
+
+    def output(self):
+        # save the model run
+        return maybe_gcs_target(f"{self.output_path}/checkpoints/last.ckpt")
+
+    def run(self):
+        with spark_resource(memory="24g") as spark:
+            # data module
+            data_module = RasterDataModel(
+                spark,
+                self.input_path,
+                self.feature_paths,
+                self.feature_cols,
+                batch_size=self.batch_size,
+                num_partitions=self.num_partitions,
+            )
+            weights = data_module.compute_weights()
+            data_module.setup()
+
+            # get parameters for the model
+            num_layers, num_features, num_classes = data_module.get_shape()
+            assert weights.shape[0] == num_classes, (weights.shape, num_classes)
+
+            # model module
+            model = RasterClassifier(
+                num_layers, num_features, num_classes, weights=weights
+            )
+
+            trainer = pl.Trainer(
+                max_epochs=20,
+                accelerator="gpu" if torch.cuda.is_available() else "cpu",
+                reload_dataloaders_every_n_epochs=1,
+                default_root_dir=self.output_path,
+                logger=WandbLogger(
+                    project="geolifeclef-2024",
+                    name="-".join(reversed(Path(self.output_path).parts[:-2:])),
+                    save_dir=self.output_path,
+                    config={
+                        "feature_paths": self.feature_paths,
+                        "feature_cols": self.feature_cols,
                         "batch_size": self.batch_size,
                         "input_path": self.input_path,
                     },
@@ -129,7 +197,16 @@ class Workflow(luigi.Task):
             TrainMultiLabelClassifier(
                 input_path=f"{self.local_root}/processed/metadata_clean/v2",
                 output_path=f"{self.local_root}/models/multilabel_classifier/v7",
-            )
+            ),
+            # v1 - first model, 18it/s on epoch 0, 69it/s on epoch 1+
+            TrainRasterClassifier(
+                input_path=f"{self.local_root}/processed/metadata_clean/v2",
+                feature_paths=[
+                    f"{self.local_root}/processed/tiles/pa-train/satellite/v3",
+                ],
+                feature_cols=["red", "green", "blue", "nir"],
+                output_path=f"{self.local_root}/models/raster_classifier/v1",
+            ),
         ]
 
 
