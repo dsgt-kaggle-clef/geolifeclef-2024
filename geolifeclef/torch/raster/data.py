@@ -8,7 +8,7 @@ import torch
 from petastorm.spark import SparkDatasetConverter, make_spark_converter
 from pyspark.ml import Pipeline
 from pyspark.ml.feature import VectorAssembler
-from pyspark.ml.functions import vector_to_array
+from pyspark.ml.functions import array_to_vector, vector_to_array
 from pyspark.ml.linalg import SparseVector, VectorUDT
 from pyspark.sql import functions as F
 from torchvision.transforms import v2
@@ -34,6 +34,20 @@ class ToSparseTensor(v2.Transform):
         return {
             "features": features.to(features.device),
             "label": label.to_sparse().to(label.device),
+        }
+
+
+class ToReshapedLayers(v2.Transform):
+    def __init__(self, num_layers, num_features):
+        self.num_layers = num_layers
+        self.num_features = num_features
+        super().__init__()
+
+    def forward(self, batch):
+        features, label = batch["features"], batch["label"]
+        return {
+            "features": features.view(-1, self.num_layers, self.num_features),
+            "label": label,
         }
 
 
@@ -69,6 +83,8 @@ class RasterDataModel(pl.LightningDataModule):
         for feature_path in self.feature_paths:
             feature_df = self.spark.read.parquet(feature_path)
             df = df.join(feature_df, on="surveyId")
+        for col in self.feature_col:
+            df = df.withColumn(col, array_to_vector(col))
         return df.cache()
 
     def _load_labels(self, df):
@@ -118,7 +134,8 @@ class RasterDataModel(pl.LightningDataModule):
 
     def get_shape(self):
         row = self._prepare_dataframe(self.valid_data).first()
-        return int(len(row.features)), int(len(row.label))
+        num_layers = len(self.feature_col)
+        return num_layers, int(len(row.features)) // num_layers, int(len(row.label))
 
     def setup(self, stage=None):
         df = self._load().cache()
@@ -139,7 +156,10 @@ class RasterDataModel(pl.LightningDataModule):
         self.converter_valid = make_spark_converter(
             self._prepare_dataframe(self.valid_data)
         )
-        self.transform = v2.Compose([ToSparseTensor()])
+        num_layers, num_features, _ = self.get_shape()
+        self.transform = v2.Compose(
+            [ToSparseTensor(), ToReshapedLayers(num_layers, num_features)]
+        )
 
     def _dataloader(self, converter):
         with converter.make_torch_dataloader(

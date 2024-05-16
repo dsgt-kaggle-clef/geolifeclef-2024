@@ -24,11 +24,17 @@ class RasterClassifier(pl.LightningModule):
         self.learning_rate = 2e-3
         self.save_hyperparameters()
         self.model = nn.Sequential(
-            # convolutional layer to go from num_features x num_layers to hidden_layer_size
-            nn.Conv2d(num_layers, hidden_layer_size, kernel_size=3, padding=1),
+            # convolutional layer
+            # we have batch_size x num_layers x num_features and want to go down to a hidden layer size
+            nn.Conv1d(num_layers, 1, 1),
+            nn.Flatten(),
+            nn.ReLU(inplace=True),
+            nn.Linear(num_features, hidden_layer_size),
             nn.ReLU(inplace=True),
             nn.Linear(hidden_layer_size, num_classes),
         )
+        # print the model architecture
+        print(self.model, flush=True)
         self.f1_score = MultilabelF1Score(num_classes, average="micro")
 
     def forward(self, x):
@@ -39,6 +45,7 @@ class RasterClassifier(pl.LightningModule):
         return optimizer
 
     def _run_step(self, batch, batch_idx, step_name):
+        # stupid hack, squeeze the first batch dimension out
         x, y = batch["features"], batch["label"].to_dense()
         logits = self(x)
         loss = torch.nn.functional.multilabel_soft_margin_loss(
