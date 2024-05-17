@@ -46,7 +46,12 @@ class ToReshapedLayers(v2.Transform):
     def forward(self, batch):
         features, label = batch["features"], batch["label"]
         return {
-            "features": features.view(-1, self.num_layers, self.num_features),
+            "features": features.view(
+                -1,
+                self.num_layers,
+                self.num_features,
+                self.num_features,
+            ),
             "label": label,
         }
 
@@ -135,7 +140,11 @@ class RasterDataModel(pl.LightningDataModule):
     def get_shape(self):
         row = self._prepare_dataframe(self.valid_data).first()
         num_layers = len(self.feature_col)
-        return num_layers, int(len(row.features)) // num_layers, int(len(row.label))
+        return (
+            num_layers,
+            int(np.sqrt(int(len(row.features)) // num_layers)),
+            int(len(row.label)),
+        )
 
     def setup(self, stage=None):
         df = self._load().cache()
