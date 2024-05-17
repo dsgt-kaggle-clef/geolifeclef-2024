@@ -14,7 +14,7 @@ class RasterClassifier(pl.LightningModule):
         num_features: int,
         num_classes: int,
         weights: Optional[torch.Tensor] = None,
-        hidden_layer_size: int = 256,
+        hidden_layer_size: int = 1024,
     ):
         super().__init__()
         self.num_layers = num_layers
@@ -45,7 +45,7 @@ class RasterClassifier(pl.LightningModule):
         return self.model(x)
 
     def configure_optimizers(self):
-        optimizer = torch.optim.Adam(self.parameters(), lr=self.learning_rate)
+        optimizer = torch.optim.AdamW(self.parameters(), lr=self.learning_rate)
         return optimizer
 
     def _run_step(self, batch, batch_idx, step_name):

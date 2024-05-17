@@ -90,7 +90,9 @@ class RasterDataModel(pl.LightningDataModule):
             df = df.join(feature_df, on="surveyId")
         for col in self.feature_col:
             df = df.withColumn(col, array_to_vector(col))
-        return df
+        return df.select(
+            "surveyId", "labels_sp", "dataset", "sample_id", *self.feature_col
+        )
 
     def _load_labels(self, df):
         return (

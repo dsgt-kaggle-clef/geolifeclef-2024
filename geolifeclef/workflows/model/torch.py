@@ -204,13 +204,14 @@ class Workflow(luigi.Task):
             # v2 - flatten the input
             # v3 - use 2d convolution
             # v4 - batch norm
+            # v5 - increase the hidden layer size
             TrainRasterClassifier(
                 input_path=f"{self.local_root}/processed/metadata_clean/v2",
                 feature_paths=[
                     f"{self.local_root}/processed/tiles/pa-train/satellite/v3",
                 ],
                 feature_cols=["red", "green", "blue", "nir"],
-                output_path=f"{self.local_root}/models/raster_classifier/v3",
+                output_path=f"{self.local_root}/models/raster_classifier/v5",
             ),
         ]
 
