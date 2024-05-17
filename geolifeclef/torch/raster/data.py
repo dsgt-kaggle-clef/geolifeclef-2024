@@ -161,7 +161,8 @@ class RasterDataModel(pl.LightningDataModule):
         return (
             num_layers,
             # int(np.sqrt(int(len(row.features)) // num_layers)),
-            128,
+            # 128,
+            8,
             int(len(row.label)),
         )
 
@@ -190,7 +191,7 @@ class RasterDataModel(pl.LightningDataModule):
             [
                 ToSparseTensor(),
                 ToReshapedLayers(num_layers, 8),
-                IDCTransform(),
+                # IDCTransform(),
             ]
         )
 

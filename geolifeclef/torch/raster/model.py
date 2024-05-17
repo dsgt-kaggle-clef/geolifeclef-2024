@@ -7,7 +7,7 @@ from torch import nn
 from torchmetrics.classification import MultilabelF1Score
 from torchvision.models import get_model
 
-from ..losses import AsymmetricLossOptimized
+from ..losses import AsymmetricLossOptimized, Hill
 
 # https://www.kaggle.com/code/rejpalcz/best-loss-function-for-f1-score-metric
 # https://stackoverflow.com/questions/65318064/can-i-trainoptimize-on-f1-score-loss-with-pytorch
@@ -20,7 +20,7 @@ class RasterClassifier(pl.LightningModule):
         num_features: int,
         num_classes: int,
         weights: Optional[torch.Tensor] = None,
-        hidden_layer_size: int = 1024,
+        hidden_layer_size: int = 256,
     ):
         super().__init__()
         self.num_layers = num_layers
@@ -49,7 +49,8 @@ class RasterClassifier(pl.LightningModule):
             nn.ReLU(inplace=True),
             nn.Conv2d(num_layers, 1, 1),
             nn.Flatten(),
-            # nn.Linear(num_features, hidden_layer_size),
+            nn.BatchNorm1d(num_features**2),
+            nn.ReLU(inplace=True),
             nn.Linear(num_features**2, hidden_layer_size),
             nn.BatchNorm1d(hidden_layer_size),
             nn.ReLU(inplace=True),
@@ -58,7 +59,7 @@ class RasterClassifier(pl.LightningModule):
         # print the model architecture
         print(self.model, flush=True)
         self.f1_score = MultilabelF1Score(num_classes, average="micro")
-        self.loss = AsymmetricLossOptimized()
+        self.loss = Hill()
         # torch.nn.functional.multilabel_soft_margin_loss
 
     def forward(self, x):

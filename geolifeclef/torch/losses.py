@@ -1,6 +1,34 @@
+# https://github.com/gabriben/metrics-as-losses/blob/main/VLAP/pytorchLosses.py
+# https://github.com/xinyu1205/robust-loss-mlml/blob/master/src/loss_functions/losses.py
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+
+
+class sigmoidF1(nn.Module):
+    def __init__(self, S=-1, E=0):
+        super(sigmoidF1, self).__init__()
+        self.S = S
+        self.E = E
+
+    @torch.cuda.amp.autocast()
+    def forward(self, y_hat, y):
+        y_hat = torch.sigmoid(y_hat)
+
+        b = torch.tensor(self.S)
+        c = torch.tensor(self.E)
+
+        sig = 1 / (1 + torch.exp(b * (y_hat + c)))
+
+        tp = torch.sum(sig * y, dim=0)
+        fp = torch.sum(sig * (1 - y), dim=0)
+        fn = torch.sum((1 - sig) * y, dim=0)
+
+        sigmoid_f1 = 2 * tp / (2 * tp + fn + fp + 1e-16)
+        cost = 1 - sigmoid_f1
+        macroCost = torch.mean(cost)
+
+        return macroCost
 
 
 class Hill(nn.Module):
