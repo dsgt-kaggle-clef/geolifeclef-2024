@@ -216,14 +216,15 @@ class Workflow(luigi.Task):
             #      this is pretty slow at 3it/s on epoch 0
             # v7 - idct and larger batch size
             # v8 - ASL loss
-            # v9 - Hill loss using DCT coefficients
+            # v9 - ASL loss using DCT coefficients
+            # v10 - Hill loss using DCT coefficients
             TrainRasterClassifier(
                 input_path=f"{self.local_root}/processed/metadata_clean/v2",
                 feature_paths=[
                     f"{self.local_root}/processed/tiles/pa-train/satellite/v3",
                 ],
                 feature_cols=["red", "green", "blue", "nir"],
-                output_path=f"{self.local_root}/models/raster_classifier/v9",
+                output_path=f"{self.local_root}/models/raster_classifier/v10",
             ),
         ]
 
