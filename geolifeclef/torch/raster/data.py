@@ -139,6 +139,7 @@ class RasterDataModel(pl.LightningDataModule):
 
     def setup(self, stage=None):
         df = self._load().cache()
+        self.df = df
         self.valid_data = (
             df.where("sample_id >= 90 and dataset='pa_train'")
             .repartition(self.num_partitions)

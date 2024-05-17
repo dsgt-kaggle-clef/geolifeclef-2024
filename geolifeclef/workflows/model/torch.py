@@ -172,6 +172,7 @@ class Workflow(luigi.Task):
             for name in [
                 "tiles/pa-train/satellite",
                 "tiles/pa-test/satellite",
+                "tiles/pa-train/LandCover/LandCover_MODIS_Terra-Aqua_500m",
             ]
         ]
 
