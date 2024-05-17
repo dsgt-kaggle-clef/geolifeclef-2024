@@ -195,10 +195,15 @@ class Workflow(luigi.Task):
             # v5 - weights are only from the pa_train set
             # v6 - set pa_only to false, also reduce the number of train samples incorporated
             # v7 - autotuning
-            # v7 - actually add the weights, set pa_only to true
+            # v8 - actually add the weights, set pa_only to true
+            # v9 - ASL loss
+            # v10 - ASL loss with sigmoid
+            # v11 - no early stopping, try to reproduce v8
+            # v12 - Hill loss
+            # v13 - hill loss, but with batch norm because loss is nan
             TrainMultiLabelClassifier(
                 input_path=f"{self.local_root}/processed/metadata_clean/v2",
-                output_path=f"{self.local_root}/models/multilabel_classifier/v8",
+                output_path=f"{self.local_root}/models/multilabel_classifier/v13",
             ),
             # v1 - first model, 18it/s on epoch 0, 69it/s on epoch 1+
             # v2 - flatten the input
@@ -207,14 +212,16 @@ class Workflow(luigi.Task):
             # v5 - increase hidden layer size
             # v6 - tried increasing hidden layer size, but it didn't help much initially. Using a efficientnetv2 backbone now...
             #      this is pretty slow at 3it/s on epoch 0
-            TrainRasterClassifier(
-                input_path=f"{self.local_root}/processed/metadata_clean/v2",
-                feature_paths=[
-                    f"{self.local_root}/processed/tiles/pa-train/satellite/v3",
-                ],
-                feature_cols=["red", "green", "blue", "nir"],
-                output_path=f"{self.local_root}/models/raster_classifier/v6",
-            ),
+            # v7 - idct and larger batch size
+            # v8 - ASL loss
+            # TrainRasterClassifier(
+            #     input_path=f"{self.local_root}/processed/metadata_clean/v2",
+            #     feature_paths=[
+            #         f"{self.local_root}/processed/tiles/pa-train/satellite/v3",
+            #     ],
+            #     feature_cols=["red", "green", "blue", "nir"],
+            #     output_path=f"{self.local_root}/models/raster_classifier/v8",
+            # ),
         ]
 
 

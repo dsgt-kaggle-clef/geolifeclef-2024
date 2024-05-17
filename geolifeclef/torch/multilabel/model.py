@@ -6,6 +6,8 @@ import torch.nn.functional
 from torch import nn
 from torchmetrics.classification import MultilabelF1Score
 
+from ..losses import AsymmetricLossOptimized, Hill
+
 
 class MultiLabelClassifier(pl.LightningModule):
     def __init__(
@@ -23,10 +25,12 @@ class MultiLabelClassifier(pl.LightningModule):
         self.save_hyperparameters()
         self.model = nn.Sequential(
             nn.Linear(num_features, hidden_layer_size),
+            nn.BatchNorm1d(hidden_layer_size),
             nn.ReLU(inplace=True),
             nn.Linear(hidden_layer_size, num_classes),
         )
         self.f1_score = MultilabelF1Score(num_classes, average="micro")
+        self.loss = Hill()
 
     def forward(self, x):
         return self.model(x)
@@ -38,9 +42,11 @@ class MultiLabelClassifier(pl.LightningModule):
     def _run_step(self, batch, batch_idx, step_name):
         x, y = batch["features"], batch["label"].to_dense()
         logits = self(x)
-        loss = torch.nn.functional.multilabel_soft_margin_loss(
-            logits, y, weight=self.weights.to(y.device)
-        )
+        loss = self.loss(logits, y)
+        # loss = torch.nn.functional.multilabel_soft_margin_loss(
+        #     logits, y, weight=self.weights.to(y.device)
+        # )
+
         self.log(f"{step_name}_loss", loss, prog_bar=True)
         self.log(
             f"{step_name}_f1",

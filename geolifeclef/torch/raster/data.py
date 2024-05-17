@@ -5,6 +5,7 @@ from pathlib import Path
 import numpy as np
 import pytorch_lightning as pl
 import torch
+import torch_dct as dct
 from petastorm.spark import SparkDatasetConverter, make_spark_converter
 from pyspark.ml import Pipeline
 from pyspark.ml.feature import VectorAssembler
@@ -52,6 +53,21 @@ class ToReshapedLayers(v2.Transform):
                 self.num_features,
                 self.num_features,
             ),
+            "label": label,
+        }
+
+
+class IDCTransform(v2.Transform):
+    def forward(self, batch):
+        features, label = batch["features"], batch["label"]
+        # put the features on a 128x128 grid
+        zero_pad = torch.zeros(
+            features.shape[0], features.shape[1], 128, 128, device=features.device
+        )
+        zero_pad[:, :, : features.shape[2], : features.shape[3]] = features
+
+        return {
+            "features": dct.idct_2d(zero_pad),
             "label": label,
         }
 
@@ -144,7 +160,8 @@ class RasterDataModel(pl.LightningDataModule):
         num_layers = len(self.feature_col)
         return (
             num_layers,
-            int(np.sqrt(int(len(row.features)) // num_layers)),
+            # int(np.sqrt(int(len(row.features)) // num_layers)),
+            128,
             int(len(row.label)),
         )
 
@@ -170,7 +187,11 @@ class RasterDataModel(pl.LightningDataModule):
         )
         num_layers, num_features, _ = self.get_shape()
         self.transform = v2.Compose(
-            [ToSparseTensor(), ToReshapedLayers(num_layers, num_features)]
+            [
+                ToSparseTensor(),
+                ToReshapedLayers(num_layers, 8),
+                IDCTransform(),
+            ]
         )
 
     def _dataloader(self, converter):
