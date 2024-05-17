@@ -39,7 +39,7 @@ class TrainMultiLabelClassifier(luigi.Task):
                 self.input_path,
                 batch_size=self.batch_size,
                 num_partitions=self.num_partitions,
-                pa_only=False,
+                pa_only=True,
             )
             weights = data_module.compute_weights()
             data_module.setup()
@@ -59,7 +59,7 @@ class TrainMultiLabelClassifier(luigi.Task):
                 default_root_dir=self.output_path,
                 logger=WandbLogger(
                     project="geolifeclef-2024",
-                    name="-".join(reversed(Path(self.output_path).parts[:-2:])),
+                    name="-".join(reversed(Path(self.output_path).parts[-2:])),
                     save_dir=self.output_path,
                     config={
                         "batch_size": self.batch_size,
@@ -123,7 +123,7 @@ class TrainRasterClassifier(luigi.Task):
                 default_root_dir=self.output_path,
                 logger=WandbLogger(
                     project="geolifeclef-2024",
-                    name="-".join(reversed(Path(self.output_path).parts[:-2:])),
+                    name="-".join(reversed(Path(self.output_path).parts[-2:])),
                     save_dir=self.output_path,
                     config={
                         "feature_paths": self.feature_paths,
@@ -194,18 +194,20 @@ class Workflow(luigi.Task):
             # v5 - weights are only from the pa_train set
             # v6 - set pa_only to false, also reduce the number of train samples incorporated
             # v7 - autotuning
+            # v7 - actually add the weights, set pa_only to true
             TrainMultiLabelClassifier(
                 input_path=f"{self.local_root}/processed/metadata_clean/v2",
-                output_path=f"{self.local_root}/models/multilabel_classifier/v7",
+                output_path=f"{self.local_root}/models/multilabel_classifier/v8",
             ),
             # v1 - first model, 18it/s on epoch 0, 69it/s on epoch 1+
+            # v2 - flatten the input
             TrainRasterClassifier(
                 input_path=f"{self.local_root}/processed/metadata_clean/v2",
                 feature_paths=[
                     f"{self.local_root}/processed/tiles/pa-train/satellite/v3",
                 ],
                 feature_cols=["red", "green", "blue", "nir"],
-                output_path=f"{self.local_root}/models/raster_classifier/v1",
+                output_path=f"{self.local_root}/models/raster_classifier/v2",
             ),
         ]
 

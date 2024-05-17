@@ -26,10 +26,11 @@ class RasterClassifier(pl.LightningModule):
         self.model = nn.Sequential(
             # convolutional layer
             # we have batch_size x num_layers x num_features and want to go down to a hidden layer size
-            nn.Conv1d(num_layers, 1, 1),
-            nn.Flatten(),
+            # nn.Conv1d(num_layers, 1, 1),
             nn.ReLU(inplace=True),
-            nn.Linear(num_features, hidden_layer_size),
+            nn.Flatten(),
+            # nn.Linear(num_features, hidden_layer_size),
+            nn.Linear(num_layers * num_features, hidden_layer_size),
             nn.ReLU(inplace=True),
             nn.Linear(hidden_layer_size, num_classes),
         )
