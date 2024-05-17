@@ -223,7 +223,7 @@ class Workflow(luigi.Task):
                     f"{self.local_root}/processed/tiles/pa-train/satellite/v3",
                 ],
                 feature_cols=["red", "green", "blue", "nir"],
-                output_path=f"{self.local_root}/models/raster_classifier/v8",
+                output_path=f"{self.local_root}/models/raster_classifier/v9",
             ),
         ]
 
