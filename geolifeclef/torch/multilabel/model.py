@@ -6,7 +6,7 @@ import torch.nn.functional
 from torch import nn
 from torchmetrics.classification import MultilabelF1Score
 
-from ..losses import AsymmetricLossOptimized, Hill
+from ..losses import AsymmetricLossOptimized, Hill, SigmoidF1
 
 
 class MultiLabelClassifier(pl.LightningModule):
@@ -30,7 +30,7 @@ class MultiLabelClassifier(pl.LightningModule):
             nn.Linear(hidden_layer_size, num_classes),
         )
         self.f1_score = MultilabelF1Score(num_classes, average="micro")
-        self.loss = Hill()
+        self.loss = AsymmetricLossOptimized()
 
     def forward(self, x):
         return self.model(x)

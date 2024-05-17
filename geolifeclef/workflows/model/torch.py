@@ -24,7 +24,7 @@ from .base_tasks import CleanMetadata
 class TrainMultiLabelClassifier(luigi.Task):
     input_path = luigi.Parameter()
     output_path = luigi.Parameter()
-    batch_size = luigi.IntParameter(default=64)
+    batch_size = luigi.IntParameter(default=128)
     num_partitions = luigi.IntParameter(default=200)
 
     def output(self):
@@ -86,7 +86,7 @@ class TrainRasterClassifier(luigi.Task):
     feature_paths = luigi.ListParameter()
     feature_cols = luigi.ListParameter()
     output_path = luigi.Parameter()
-    batch_size = luigi.IntParameter(default=64)
+    batch_size = luigi.IntParameter(default=250)
     num_partitions = luigi.IntParameter(default=200)
 
     def output(self):
@@ -201,9 +201,11 @@ class Workflow(luigi.Task):
             # v11 - no early stopping, try to reproduce v8
             # v12 - Hill loss
             # v13 - hill loss, but with batch norm because loss is nan
+            # v14 - sigmoidf1 loss
+            # v15 - ASL loss again
             TrainMultiLabelClassifier(
                 input_path=f"{self.local_root}/processed/metadata_clean/v2",
-                output_path=f"{self.local_root}/models/multilabel_classifier/v13",
+                output_path=f"{self.local_root}/models/multilabel_classifier/v15",
             ),
             # v1 - first model, 18it/s on epoch 0, 69it/s on epoch 1+
             # v2 - flatten the input

@@ -5,9 +5,9 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
-class sigmoidF1(nn.Module):
+class SigmoidF1(nn.Module):
     def __init__(self, S=-1, E=0):
-        super(sigmoidF1, self).__init__()
+        super().__init__()
         self.S = S
         self.E = E
 

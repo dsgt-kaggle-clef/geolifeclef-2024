@@ -59,7 +59,7 @@ class RasterClassifier(pl.LightningModule):
         # print the model architecture
         print(self.model, flush=True)
         self.f1_score = MultilabelF1Score(num_classes, average="micro")
-        self.loss = Hill()
+        self.loss = AsymmetricLossOptimized()
         # torch.nn.functional.multilabel_soft_margin_loss
 
     def forward(self, x):
