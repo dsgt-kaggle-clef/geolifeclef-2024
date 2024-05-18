@@ -186,31 +186,40 @@ class RasterDataModel(pl.LightningDataModule):
         self.converter_valid = make_spark_converter(
             self._prepare_dataframe(self.valid_data)
         )
-        num_layers, num_features, _ = self.get_shape()
-        self.transform = v2.Compose(
+
+    def get_transform(self, augment=True):
+        num_layers, _, _ = self.get_shape()
+        return v2.Compose(
             [
                 ToSparseTensor(),
                 ToReshapedLayers(num_layers, 8),
                 IDCTransform(),
-                # v2.RandomHorizontalFlip(),
-                # v2.RandomVerticalFlip(),
-                # v2.RandomResizedCrop(128, scale=(0.8, 1.0)),
+                *(
+                    [
+                        v2.RandomHorizontalFlip(),
+                        v2.RandomVerticalFlip(),
+                        v2.RandomResizedCrop(128, scale=(0.8, 1.0)),
+                    ]
+                    if augment
+                    else []
+                ),
             ]
         )
 
-    def _dataloader(self, converter):
+    def _dataloader(self, converter, augment=True):
+        transform = self.get_transform(augment)
         with converter.make_torch_dataloader(
             batch_size=self.batch_size,
             num_epochs=1,
             workers_count=self.workers_count,
         ) as dataloader:
             for batch in dataloader:
-                yield self.transform(batch)
+                yield transform(batch)
 
     def train_dataloader(self):
         for batch in self._dataloader(self.converter_train):
             yield batch
 
     def val_dataloader(self):
-        for batch in self._dataloader(self.converter_valid):
+        for batch in self._dataloader(self.converter_valid, augment=False):
             yield batch

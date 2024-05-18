@@ -221,13 +221,14 @@ class Workflow(luigi.Task):
             # v11 - use efficientnet with coefficients
             # v12 - cnn with idct images (random rotations)
             # v13 - remove augmentations
+            # v14 - add augmentations back, but don't augment the validation
             TrainRasterClassifier(
                 input_path=f"{self.local_root}/processed/metadata_clean/v2",
                 feature_paths=[
                     f"{self.local_root}/processed/tiles/pa-train/satellite/v3",
                 ],
                 feature_cols=["red", "green", "blue", "nir"],
-                output_path=f"{self.local_root}/models/raster_classifier/v13",
+                output_path=f"{self.local_root}/models/raster_classifier/v14",
             ),
         ]
 
