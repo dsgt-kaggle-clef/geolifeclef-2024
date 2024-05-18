@@ -30,32 +30,32 @@ class RasterClassifier(pl.LightningModule):
         self.learning_rate = 2e-3
         self.save_hyperparameters()
         # https://pytorch.org/vision/stable/models/generated/torchvision.models.efficientnet_v2_s.html#torchvision.models.efficientnet_v2_s
-        net = get_model("efficientnet_v2_s")
-        self.model = nn.Sequential(
-            # get the appropriate input size
-            nn.Conv2d(num_layers, 3, kernel_size=1),
-            *list(net.children())[:-1],
-            nn.Flatten(),
-            # dropout
-            nn.Dropout(0.2, inplace=True),
-            nn.Linear(1280, num_classes),
-        )
-
+        # net = get_model("efficientnet_v2_s")
         # self.model = nn.Sequential(
-        #     # convolutional layer
-        #     # we have batch_size x num_layers x num_features x num_features and want to go down to a hidden layer size
-        #     nn.Conv2d(num_layers, num_layers, kernel_size=3, padding=1),
-        #     nn.BatchNorm2d(num_layers),
-        #     nn.ReLU(inplace=True),
-        #     nn.Conv2d(num_layers, 1, 1),
+        #     # get the appropriate input size
+        #     nn.Conv2d(num_layers, 3, kernel_size=1),
+        #     *list(net.children())[:-1],
         #     nn.Flatten(),
-        #     nn.BatchNorm1d(num_features**2),
-        #     nn.ReLU(inplace=True),
-        #     nn.Linear(num_features**2, hidden_layer_size),
-        #     nn.BatchNorm1d(hidden_layer_size),
-        #     nn.ReLU(inplace=True),
-        #     nn.Linear(hidden_layer_size, num_classes),
+        #     # dropout
+        #     nn.Dropout(0.2, inplace=True),
+        #     nn.Linear(1280, num_classes),
         # )
+
+        self.model = nn.Sequential(
+            # convolutional layer
+            # we have batch_size x num_layers x num_features x num_features and want to go down to a hidden layer size
+            nn.Conv2d(num_layers, num_layers, kernel_size=3, padding=1),
+            nn.BatchNorm2d(num_layers),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(num_layers, 1, 1),
+            nn.Flatten(),
+            nn.BatchNorm1d(num_features**2),
+            nn.ReLU(inplace=True),
+            nn.Linear(num_features**2, hidden_layer_size),
+            nn.BatchNorm1d(hidden_layer_size),
+            nn.ReLU(inplace=True),
+            nn.Linear(hidden_layer_size, num_classes),
+        )
         # print the model architecture
         print(self.model, flush=True)
         self.f1_score = MultilabelF1Score(num_classes, average="micro")

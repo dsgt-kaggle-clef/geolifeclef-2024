@@ -219,13 +219,14 @@ class Workflow(luigi.Task):
             # v9 - ASL loss using DCT coefficients
             # v10 - Hill loss using DCT coefficients
             # v11 - use efficientnet with coefficients
+            # v12 - cnn with idct images (random rotations)
             TrainRasterClassifier(
                 input_path=f"{self.local_root}/processed/metadata_clean/v2",
                 feature_paths=[
                     f"{self.local_root}/processed/tiles/pa-train/satellite/v3",
                 ],
                 feature_cols=["red", "green", "blue", "nir"],
-                output_path=f"{self.local_root}/models/raster_classifier/v11",
+                output_path=f"{self.local_root}/models/raster_classifier/v12",
             ),
         ]
 
