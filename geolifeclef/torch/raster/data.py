@@ -192,9 +192,9 @@ class RasterDataModel(pl.LightningDataModule):
                 ToSparseTensor(),
                 ToReshapedLayers(num_layers, 8),
                 IDCTransform(),
-                v2.RandomHorizontalFlip(),
-                v2.RandomVerticalFlip(),
-                v2.RandomResizedCrop(128, scale=(0.8, 1.0)),
+                # v2.RandomHorizontalFlip(),
+                # v2.RandomVerticalFlip(),
+                # v2.RandomResizedCrop(128, scale=(0.8, 1.0)),
             ]
         )
 
