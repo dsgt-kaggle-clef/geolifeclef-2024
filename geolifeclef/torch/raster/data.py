@@ -117,7 +117,7 @@ class RasterDataModel(pl.LightningDataModule):
         pa_only=True,
         batch_size=32,
         num_partitions=32,
-        workers_count=os.cpu_count() // 2,
+        workers_count=8,
         cache_dir="file:///mnt/data/tmp",
     ):
         super().__init__()
@@ -228,25 +228,25 @@ class RasterDataModel(pl.LightningDataModule):
             [
                 ToSparseTensor(),
                 ToReshapedLayers(num_layers, 8),
-                # IDCTransform(),
-                # *(
-                #     [
-                #         v2.RandomHorizontalFlip(),
-                #         v2.RandomVerticalFlip(),
-                #         v2.RandomResizedCrop(128, scale=(0.8, 1.0)),
-                #     ]
-                #     if augment
-                #     else []
-                # ),
+                IDCTransform(),
                 *(
                     [
-                        DCTRandomRotation(),
-                        DCTRandomHorizontalFlip(),
-                        DCTRandomVerticalFlip(),
+                        v2.RandomHorizontalFlip(),
+                        v2.RandomVerticalFlip(),
+                        v2.RandomResizedCrop(128, scale=(0.8, 1.0)),
                     ]
                     if augment
                     else []
                 ),
+                # *(
+                #     [
+                #         DCTRandomRotation(),
+                #         DCTRandomHorizontalFlip(),
+                #         DCTRandomVerticalFlip(),
+                #     ]
+                #     if augment
+                #     else []
+                # ),
             ]
         )
 

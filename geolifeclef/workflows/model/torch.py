@@ -6,7 +6,7 @@ import luigi
 import luigi.contrib.gcs
 import pytorch_lightning as pl
 import torch
-from pytorch_lightning.callbacks import LearningRateFinder
+from pytorch_lightning.callbacks import LearningRateFinder, StochasticWeightAveraging
 from pytorch_lightning.callbacks.early_stopping import EarlyStopping
 from pytorch_lightning.callbacks.model_checkpoint import ModelCheckpoint
 from pytorch_lightning.loggers import WandbLogger
@@ -135,6 +135,7 @@ class TrainRasterClassifier(luigi.Task):
                 callbacks=[
                     EarlyStopping(monitor="val_loss", mode="min", min_delta=1e-4),
                     EarlyStopping(monitor="val_f1", mode="max"),
+                    StochasticWeightAveraging(swa_lrs=1e-2),
                     ModelCheckpoint(
                         dirpath=os.path.join(self.output_path, "checkpoints"),
                         monitor="val_f1",
@@ -226,14 +227,15 @@ class Workflow(luigi.Task):
             # v15 - add another convolutional layer
             # v16 - use augmentations with dct coefficients, same as v14
             # v17 - use idct inside the model
-            # TODO: v17 - add more coefficients for bio and time-series
+            # v18 - v14 with SWA
+            # TODO: vXX - add more coefficients for bio and time-series
             TrainRasterClassifier(
                 input_path=f"{self.local_root}/processed/metadata_clean/v2",
                 feature_paths=[
                     f"{self.local_root}/processed/tiles/pa-train/satellite/v3",
                 ],
                 feature_cols=["red", "green", "blue", "nir"],
-                output_path=f"{self.local_root}/models/raster_classifier/v17",
+                output_path=f"{self.local_root}/models/raster_classifier/v18",
             ),
         ]
 

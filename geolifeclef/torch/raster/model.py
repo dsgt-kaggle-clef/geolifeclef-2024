@@ -61,18 +61,18 @@ class RasterClassifier(pl.LightningModule):
         self.loss = AsymmetricLossOptimized()
         # torch.nn.functional.multilabel_soft_margin_loss
 
-    def _transform(self, batch):
-        features, label = batch["features"], batch["label"]
-        # put the features on a 128x128 grid
-        zero_pad = torch.zeros(
-            features.shape[0], features.shape[1], 128, 128, device=features.device
-        )
-        zero_pad[:, :, : features.shape[2], : features.shape[3]] = features
+    # def _transform(self, batch):
+    #     features, label = batch["features"], batch["label"]
+    #     # put the features on a 128x128 grid
+    #     zero_pad = torch.zeros(
+    #         features.shape[0], features.shape[1], 128, 128, device=features.device
+    #     )
+    #     zero_pad[:, :, : features.shape[2], : features.shape[3]] = features
 
-        return {
-            "features": dct.idct_2d(zero_pad),
-            "label": label,
-        }
+    #     return {
+    #         "features": dct.idct_2d(zero_pad),
+    #         "label": label,
+    #     }
 
     def forward(self, batch):
         return self.model(batch)
@@ -83,7 +83,7 @@ class RasterClassifier(pl.LightningModule):
 
     def _run_step(self, batch, batch_idx, step_name):
         # stupid hack, squeeze the first batch dimension out
-        batch = self._transform(batch)
+        # batch = self._transform(batch)
         x, y = batch["features"], batch["label"].to_dense()
         logits = self(x)
         loss = self.loss(logits, y)
