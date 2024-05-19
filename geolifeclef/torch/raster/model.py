@@ -45,15 +45,8 @@ class RasterClassifier(pl.LightningModule):
             nn.Conv2d(num_layers, num_layers, kernel_size=3, padding=1),
             nn.BatchNorm2d(num_layers),
             nn.ReLU(inplace=True),
-            # now reduce to a single layer
+            # now reduce to a single embedding layer
             nn.Conv2d(num_layers, 1, kernel_size=1),
-            nn.BatchNorm2d(1),
-            nn.ReLU(inplace=True),
-            # convolve features again
-            nn.Conv2d(1, 1, kernel_size=3, padding=1),
-            nn.BatchNorm2d(1),
-            nn.ReLU(inplace=True),
-            # now generate an embedding layer
             nn.Flatten(),
             nn.Linear(num_features**2, hidden_layer_size),
             nn.BatchNorm1d(hidden_layer_size),

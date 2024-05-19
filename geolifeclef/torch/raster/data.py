@@ -72,6 +72,41 @@ class IDCTransform(v2.Transform):
         }
 
 
+class DCTRandomRotation(v2.Transform):
+    def __init__(self, p=0.5):
+        self.p = p
+        super().__init__()
+
+    def forward(self, batch):
+        # just transpose the features
+        if torch.rand(1) < self.p:
+            batch["features"] = batch["features"].transpose(-1, -2)
+        return batch
+
+
+class DCTRandomHorizontalFlip(v2.Transform):
+    def __init__(self, p=0.5):
+        self.p = p
+        self.odd_factor = -torch.ones((8, 8))
+        for i in range(0, 8, 2):
+            self.odd_factor[i, :] = 1
+        super().__init__()
+
+    def forward(self, batch):
+        # just flip the features
+        if torch.rand(1) < self.p:
+            batch["features"] = batch["features"] * self.odd_factor
+        return batch
+
+
+class DCTRandomVerticalFlip(DCTRandomHorizontalFlip):
+    def forward(self, batch):
+        # just flip the features
+        if torch.rand(1) < self.p:
+            batch["features"] = batch["features"] * self.odd_factor.T
+        return batch
+
+
 class RasterDataModel(pl.LightningDataModule):
     def __init__(
         self,
@@ -161,8 +196,8 @@ class RasterDataModel(pl.LightningDataModule):
         return (
             num_layers,
             # int(np.sqrt(int(len(row.features)) // num_layers)),
-            128,
-            # 8,
+            # 128,
+            8,
             int(len(row.label)),
         )
 
@@ -193,12 +228,21 @@ class RasterDataModel(pl.LightningDataModule):
             [
                 ToSparseTensor(),
                 ToReshapedLayers(num_layers, 8),
-                IDCTransform(),
+                # IDCTransform(),
+                # *(
+                #     [
+                #         v2.RandomHorizontalFlip(),
+                #         v2.RandomVerticalFlip(),
+                #         v2.RandomResizedCrop(128, scale=(0.8, 1.0)),
+                #     ]
+                #     if augment
+                #     else []
+                # ),
                 *(
                     [
-                        v2.RandomHorizontalFlip(),
-                        v2.RandomVerticalFlip(),
-                        v2.RandomResizedCrop(128, scale=(0.8, 1.0)),
+                        DCTRandomRotation(),
+                        DCTRandomHorizontalFlip(),
+                        DCTRandomVerticalFlip(),
                     ]
                     if augment
                     else []

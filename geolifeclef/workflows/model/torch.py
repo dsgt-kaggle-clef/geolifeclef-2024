@@ -224,7 +224,7 @@ class Workflow(luigi.Task):
             # v13 - remove augmentations - less good
             # v14 - add augmentations back, but don't augment the validation - even better
             # v15 - add another convolutional layer
-            # TODO: v16 - use augmentations with dct coefficients
+            # v16 - use augmentations with dct coefficients, same as v14
             # TODO: v17 - add more coefficients for bio and time-series
             TrainRasterClassifier(
                 input_path=f"{self.local_root}/processed/metadata_clean/v2",
@@ -232,7 +232,7 @@ class Workflow(luigi.Task):
                     f"{self.local_root}/processed/tiles/pa-train/satellite/v3",
                 ],
                 feature_cols=["red", "green", "blue", "nir"],
-                output_path=f"{self.local_root}/models/raster_classifier/v15",
+                output_path=f"{self.local_root}/models/raster_classifier/v16",
             ),
         ]
 
