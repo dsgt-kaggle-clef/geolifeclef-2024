@@ -3,6 +3,7 @@ from typing import Optional
 import pytorch_lightning as pl
 import torch
 import torch.nn.functional
+import torch_dct as dct
 from torch import nn
 from torchmetrics.classification import MultilabelF1Score
 from torchvision.models import get_model
@@ -60,8 +61,21 @@ class RasterClassifier(pl.LightningModule):
         self.loss = AsymmetricLossOptimized()
         # torch.nn.functional.multilabel_soft_margin_loss
 
-    def forward(self, x):
-        return self.model(x)
+    def _transform(self, batch):
+        features, label = batch["features"], batch["label"]
+        # put the features on a 128x128 grid
+        zero_pad = torch.zeros(
+            features.shape[0], features.shape[1], 128, 128, device=features.device
+        )
+        zero_pad[:, :, : features.shape[2], : features.shape[3]] = features
+
+        return {
+            "features": dct.idct_2d(zero_pad),
+            "label": label,
+        }
+
+    def forward(self, batch):
+        return self.model(batch)
 
     def configure_optimizers(self):
         optimizer = torch.optim.AdamW(self.parameters(), lr=self.learning_rate)
@@ -69,6 +83,7 @@ class RasterClassifier(pl.LightningModule):
 
     def _run_step(self, batch, batch_idx, step_name):
         # stupid hack, squeeze the first batch dimension out
+        batch = self._transform(batch)
         x, y = batch["features"], batch["label"].to_dense()
         logits = self(x)
         loss = self.loss(logits, y)

@@ -196,8 +196,8 @@ class RasterDataModel(pl.LightningDataModule):
         return (
             num_layers,
             # int(np.sqrt(int(len(row.features)) // num_layers)),
-            # 128,
-            8,
+            128,
+            # 8,
             int(len(row.label)),
         )
 
