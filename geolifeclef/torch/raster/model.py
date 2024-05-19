@@ -40,20 +40,25 @@ class RasterClassifier(pl.LightningModule):
         #     nn.Dropout(0.2, inplace=True),
         #     nn.Linear(1280, num_classes),
         # )
-
         self.model = nn.Sequential(
-            # convolutional layer
-            # we have batch_size x num_layers x num_features x num_features and want to go down to a hidden layer size
+            # convolve the layers
             nn.Conv2d(num_layers, num_layers, kernel_size=3, padding=1),
             nn.BatchNorm2d(num_layers),
             nn.ReLU(inplace=True),
-            nn.Conv2d(num_layers, 1, 1),
-            nn.Flatten(),
-            nn.BatchNorm1d(num_features**2),
+            # now reduce to a single layer
+            nn.Conv2d(num_layers, 1, kernel_size=1),
+            nn.BatchNorm2d(1),
             nn.ReLU(inplace=True),
+            # convolve features again
+            nn.Conv2d(1, 1, kernel_size=3, padding=1),
+            nn.BatchNorm2d(1),
+            nn.ReLU(inplace=True),
+            # now generate an embedding layer
+            nn.Flatten(),
             nn.Linear(num_features**2, hidden_layer_size),
             nn.BatchNorm1d(hidden_layer_size),
             nn.ReLU(inplace=True),
+            # learn the logits for the classes
             nn.Linear(hidden_layer_size, num_classes),
         )
         # print the model architecture

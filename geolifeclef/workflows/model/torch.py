@@ -201,7 +201,7 @@ class Workflow(luigi.Task):
             # v11 - no early stopping, try to reproduce v8
             # v12 - Hill loss
             # v13 - hill loss, but with batch norm because loss is nan
-            # v14 - sigmoidf1 loss
+            # v14 - sigmoidf1 loss - not as great as I would have wanted
             # v15 - ASL loss again
             TrainMultiLabelClassifier(
                 input_path=f"{self.local_root}/processed/metadata_clean/v2",
@@ -210,25 +210,29 @@ class Workflow(luigi.Task):
             # v1 - first model, 18it/s on epoch 0, 69it/s on epoch 1+
             # v2 - flatten the input
             # v3 - use 2d convolution
-            # v4 - batch norm
-            # v5 - increase hidden layer size
-            # v6 - tried increasing hidden layer size, but it didn't help much initially. Using a efficientnetv2 backbone now...
-            #      this is pretty slow at 3it/s on epoch 0
+            # v4 - batch norm - necessary to get a loss
+            # v5 - increase hidden layer size - very little effect
+            # v6 - trying efficientnetv2 backbone now...
+            #       this is pretty slow at 3it/s on epoch 0
             # v7 - idct and larger batch size
             # v8 - ASL loss
             # v9 - ASL loss using DCT coefficients
             # v10 - Hill loss using DCT coefficients
+            #       there are too many knobs to turn
             # v11 - use efficientnet with coefficients
-            # v12 - cnn with idct images (random rotations)
-            # v13 - remove augmentations
-            # v14 - add augmentations back, but don't augment the validation
+            # v12 - cnn with idct images (random rotations) - very good
+            # v13 - remove augmentations - less good
+            # v14 - add augmentations back, but don't augment the validation - even better
+            # v15 - add another convolutional layer
+            # TODO: v16 - use augmentations with dct coefficients
+            # TODO: v17 - add more coefficients for bio and time-series
             TrainRasterClassifier(
                 input_path=f"{self.local_root}/processed/metadata_clean/v2",
                 feature_paths=[
                     f"{self.local_root}/processed/tiles/pa-train/satellite/v3",
                 ],
                 feature_cols=["red", "green", "blue", "nir"],
-                output_path=f"{self.local_root}/models/raster_classifier/v14",
+                output_path=f"{self.local_root}/models/raster_classifier/v15",
             ),
         ]
 
