@@ -1,4 +1,5 @@
 import os
+import warnings
 from collections import Counter
 from pathlib import Path
 
@@ -28,32 +29,25 @@ def _collect_sparse_labels(array):
     return func(array)
 
 
-# create a transform to convert a list of numbers into a sparse tensor
-class ToSparseTensor(v2.Transform):
-    def forward(self, batch):
-        features, label = batch["features"], batch["label"]
-        return {
-            "features": features.to(features.device),
-            "label": label.to_sparse().to(label.device),
-        }
-
-
 class ToReshapedLayers(v2.Transform):
-    def __init__(self, num_layers, num_features):
+    def __init__(self, features, num_layers, num_features):
+        self.features = features
         self.num_layers = num_layers
         self.num_features = num_features
         super().__init__()
 
     def forward(self, batch):
-        features, label = batch["features"], batch["label"]
+        # stack the features together
         return {
-            "features": features.view(
-                -1,
-                self.num_layers,
-                self.num_features,
-                self.num_features,
+            "features": (
+                torch.stack([batch[col] for col in self.features]).view(
+                    -1,
+                    self.num_layers,
+                    self.num_features,
+                    self.num_features,
+                )
             ),
-            "label": label,
+            "label": batch["label"].to_sparse(),
         }
 
 
@@ -114,7 +108,6 @@ class RasterDataModel(pl.LightningDataModule):
         input_path,
         feature_paths,
         feature_col=["red", "green", "blue", "nir"],
-        pa_only=True,
         batch_size=32,
         num_partitions=32,
         workers_count=8,
@@ -129,49 +122,59 @@ class RasterDataModel(pl.LightningDataModule):
         self.input_path = input_path
         self.feature_paths = feature_paths
         self.feature_col = feature_col
+        self.normalized_feature_col = [
+            self._normalize_column_name(x) for x in feature_col
+        ]
         self.batch_size = batch_size
         self.num_partitions = num_partitions
         self.workers_count = workers_count
 
+    def _normalize_column_name(self, col):
+        return col.lower().replace("-", "_")
+
     def _load(self):
-        metadata = self.spark.read.parquet(self.input_path)
+        metadata = self.spark.read.parquet(self.input_path).where(
+            "dataset = 'pa_train'"
+        )
         df = self._load_labels(metadata)
+
         for feature_path in self.feature_paths:
             feature_df = self.spark.read.parquet(feature_path)
-            df = df.join(feature_df, on="surveyId")
-        for col in self.feature_col:
-            df = df.withColumn(col, array_to_vector(col))
-        return df.select(
-            "surveyId", "labels_sp", "dataset", "sample_id", *self.feature_col
-        )
+            df = df.join(
+                feature_df.select(
+                    F.col("surveyId").cast("integer").alias("surveyId"),
+                    *[
+                        F.col(x).alias(self._normalize_column_name(x))
+                        for x in feature_df.columns
+                        if x in self.feature_col
+                    ],
+                ).distinct(),
+                on="surveyId",
+                how="inner",
+            )
+
+        return df.select("surveyId", "label", "sample_id", *self.normalized_feature_col)
 
     def _load_labels(self, df):
         return (
-            df.groupBy("surveyId")
+            df.withColumn("surveyId", F.col("surveyId").cast("integer"))
+            .groupBy("surveyId")
             .agg(
-                _collect_sparse_labels(
-                    F.collect_list("speciesId").cast("array<short>")
-                ).alias("labels_sp"),
-                F.first("dataset").alias("dataset"),
+                vector_to_array(
+                    _collect_sparse_labels(F.collect_list("speciesId")),
+                    "float32",
+                )
+                .cast("array<boolean>")
+                .alias("label"),
             )
             .withColumn("sample_id", F.crc32(F.col("surveyId").cast("string")) % 100)
         )
 
     def _prepare_dataframe(self, df):
-        """Prepare the DataFrame for training by ensuring correct types and repartitioning"""
-        pipeline = Pipeline(
-            stages=[
-                VectorAssembler(
-                    inputCols=self.feature_col,
-                    outputCol="features",
-                )
-            ]
-        )
-        res = pipeline.fit(df).transform(df)
-        return res.select(
-            vector_to_array("features").alias("features"),
-            vector_to_array("labels_sp").cast("array<boolean>").alias("label"),
-        )
+        return df.select(
+            *self.normalized_feature_col,
+            "label",
+        ).repartition(self.num_partitions)
 
     def get_shape(self):
         row = self._prepare_dataframe(self.valid_data).first()
@@ -185,32 +188,27 @@ class RasterDataModel(pl.LightningDataModule):
         )
 
     def setup(self, stage=None):
-        df = self._load().cache()
+        df = self._load()
         self.df = df
-        self.valid_data = (
-            df.where("sample_id >= 90 and dataset='pa_train'")
-            .repartition(self.num_partitions)
-            .cache()
-        )
-        self.train_data = (
-            df.join(self.valid_data.select("surveyId"), on="surveyId", how="left_anti")
-            .repartition(self.num_partitions)
-            .cache()
-        )
+        self.valid_data = df.where("sample_id >= 90")
+        self.train_data = df.where("sample_id < 90")
 
-        self.converter_train = make_spark_converter(
-            self._prepare_dataframe(self.train_data)
-        )
-        self.converter_valid = make_spark_converter(
-            self._prepare_dataframe(self.valid_data)
-        )
+        with warnings.catch_warnings():
+            warnings.simplefilter(action="ignore", category=FutureWarning)
+            self.converter_train = make_spark_converter(
+                self._prepare_dataframe(self.train_data),
+                compression_codec="snappy",
+            )
+            self.converter_valid = make_spark_converter(
+                self._prepare_dataframe(self.valid_data),
+                compression_codec="snappy",
+            )
 
     def get_transform(self, augment=True):
         num_layers, _, _ = self.get_shape()
         return v2.Compose(
             [
-                ToSparseTensor(),
-                ToReshapedLayers(num_layers, 8),
+                ToReshapedLayers(self.normalized_feature_col, num_layers, 8),
                 IDCTransform(),
                 *(
                     [
@@ -235,13 +233,15 @@ class RasterDataModel(pl.LightningDataModule):
 
     def _dataloader(self, converter, augment=True):
         transform = self.get_transform(augment)
-        with converter.make_torch_dataloader(
-            batch_size=self.batch_size,
-            num_epochs=1,
-            workers_count=self.workers_count,
-        ) as dataloader:
-            for batch in dataloader:
-                yield transform(batch)
+        with warnings.catch_warnings():
+            warnings.simplefilter(action="ignore", category=FutureWarning)
+            with converter.make_torch_dataloader(
+                batch_size=self.batch_size,
+                num_epochs=1,
+                workers_count=self.workers_count,
+            ) as dataloader:
+                for batch in dataloader:
+                    yield transform(batch)
 
     def train_dataloader(self):
         for batch in self._dataloader(self.converter_train):

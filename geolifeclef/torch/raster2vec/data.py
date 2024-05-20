@@ -78,6 +78,27 @@ class IDCTransform(v2.Transform):
         }
 
 
+class AugmentPairs(v2.Transform):
+    def __init__(self):
+        super().__init__()
+        self.transform = v2.Compose(
+            [
+                v2.RandomHorizontalFlip(),
+                v2.RandomVerticalFlip(),
+                v2.RandomResizedCrop(128, scale=(0.8, 1.0)),
+            ]
+        )
+
+    def forward(self, batch):
+        # apply the transform to both the anchor and the neighbor
+        return {
+            "features": {
+                k: self.transform(features) for k, features in batch["features"].items()
+            },
+            "label": batch["label"],
+        }
+
+
 class MiniBatchTriplet(v2.Transform):
     """Now that the we've applied randomization to our pairs, we simply a triple that's random from the batch."""
 
@@ -96,41 +117,6 @@ class MiniBatchTriplet(v2.Transform):
                 "distant": batch["label"]["anchor"][idx].to_sparse(),
             },
         }
-
-
-class DCTRandomRotation(v2.Transform):
-    def __init__(self, p=0.5):
-        self.p = p
-        super().__init__()
-
-    def forward(self, batch):
-        # just transpose the features
-        if torch.rand(1) < self.p:
-            batch["features"] = batch["features"].transpose(-1, -2)
-        return batch
-
-
-class DCTRandomHorizontalFlip(v2.Transform):
-    def __init__(self, p=0.5):
-        self.p = p
-        self.odd_factor = -torch.ones((8, 8))
-        for i in range(0, 8, 2):
-            self.odd_factor[i, :] = 1
-        super().__init__()
-
-    def forward(self, batch):
-        # just flip the features
-        if torch.rand(1) < self.p:
-            batch["features"] = batch["features"] * self.odd_factor
-        return batch
-
-
-class DCTRandomVerticalFlip(DCTRandomHorizontalFlip):
-    def forward(self, batch):
-        # just flip the features
-        if torch.rand(1) < self.p:
-            batch["features"] = batch["features"] * self.odd_factor.T
-        return batch
 
 
 class Raster2VecDataModel(pl.LightningDataModule):
@@ -188,7 +174,7 @@ class Raster2VecDataModel(pl.LightningDataModule):
             feature_df = self.spark.read.parquet(feature_path)
             df = df.join(feature_df, on="surveyId")
         for col in self.feature_col:
-            df = df.withColumn(col, array_to_vector(col))
+            df = df.withColumn(col, array_to_vector(F.col(col).cast("array<float>")))
         data = (
             df.select("surveyId", *self.feature_col)
             .join(
@@ -212,8 +198,8 @@ class Raster2VecDataModel(pl.LightningDataModule):
     def _sample_edges(self, edges, seed, limit, sample=0.01, filter=None):
         if filter is not None:
             edges = edges.join(
-                filter.selectExpr("surveyId as srcSurveyId"), how="anti"
-            ).join(filter.selectExpr("surveyId as dstSurveyId"), how="anti")
+                filter.selectExpr("surveyId as srcSurveyId"), how="left_anti"
+            ).join(filter.selectExpr("surveyId as dstSurveyId"), how="left_anti")
         return (
             edges.where("srcDataset = 'po'")
             .where("dstDataset = 'po'")
@@ -237,18 +223,11 @@ class Raster2VecDataModel(pl.LightningDataModule):
 
     def _prepare_dataframe(self, df):
         """Prepare the DataFrame for training by ensuring correct types and repartitioning"""
-        pipeline = Pipeline(
-            stages=[
-                VectorAssembler(
-                    inputCols=self.feature_col,
-                    outputCol="features",
-                )
-            ]
-        )
-        res = pipeline.fit(df).transform(df)
+        asm = VectorAssembler(inputCols=self.feature_col, outputCol="features")
+        res = asm.transform(df)
         return res.select(
             "surveyId",
-            vector_to_array("features").alias("features"),
+            vector_to_array("features", "float32").alias("features"),
             vector_to_array("labels_sp").cast("array<boolean>").alias("label"),
         )
 
@@ -306,25 +285,8 @@ class Raster2VecDataModel(pl.LightningDataModule):
             [
                 ToReshapedLayers(num_layers, 8),
                 IDCTransform(),
-                *(
-                    [
-                        v2.RandomHorizontalFlip(),
-                        v2.RandomVerticalFlip(),
-                        v2.RandomResizedCrop(128, scale=(0.8, 1.0)),
-                    ]
-                    if augment
-                    else []
-                ),
+                *([AugmentPairs()] if augment else []),
                 MiniBatchTriplet(),
-                # *(
-                #     [
-                #         DCTRandomRotation(),
-                #         DCTRandomHorizontalFlip(),
-                #         DCTRandomVerticalFlip(),
-                #     ]
-                #     if augment
-                #     else []
-                # ),
             ]
         )
 

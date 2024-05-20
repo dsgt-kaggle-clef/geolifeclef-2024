@@ -86,7 +86,7 @@ class TrainRasterClassifier(luigi.Task):
     feature_paths = luigi.ListParameter()
     feature_cols = luigi.ListParameter()
     output_path = luigi.Parameter()
-    batch_size = luigi.IntParameter(default=250)
+    batch_size = luigi.IntParameter(default=100)
     num_partitions = luigi.IntParameter(default=200)
 
     def output(self):
@@ -94,7 +94,7 @@ class TrainRasterClassifier(luigi.Task):
         return maybe_gcs_target(f"{self.output_path}/checkpoints/last.ckpt")
 
     def run(self):
-        with spark_resource(memory="8g") as spark:
+        with spark_resource() as spark:
             # data module
             data_module = RasterDataModel(
                 spark,
@@ -168,7 +168,6 @@ class Workflow(luigi.Task):
             )
             for name in [
                 "tiles/pa-train/satellite",
-                "tiles/pa-test/satellite",
                 "tiles/pa-train/LandCover/LandCover_MODIS_Terra-Aqua_500m",
             ]
         ]
@@ -224,16 +223,20 @@ class Workflow(luigi.Task):
             # v16 - use augmentations with dct coefficients, same as v14
             # v17 - use idct inside the model
             # v18 - v14 with SWA
-            # TODO: vXX - add more coefficients for bio and time-series
+            # TODO: v19 - add more coefficients for landcover/modis
+            #       fixed a very serious bug in the data module that throws off validation results
+            # v20 - repeat v18 with fixed bug
             TrainRasterClassifier(
                 input_path=f"{self.local_root}/processed/metadata_clean/v2",
                 feature_paths=[
                     f"{self.local_root}/processed/tiles/pa-train/satellite/v3",
-                    f"{self.local_root}/processed/tiles/pa-train/LandCover/LandCover_MODIS_Terra-Aqua_500m/v3",
+                    # f"{self.local_root}/processed/tiles/pa-train/LandCover/LandCover_MODIS_Terra-Aqua_500m/v3",
                 ],
-                feature_cols=["red", "green", "blue", "nir"]
-                + [f"LandCover_MODIS_Terra-Aqua_500m_{i+1}" for i in range(5)],
-                output_path=f"{self.local_root}/models/raster_classifier/v19",
+                feature_cols=(
+                    ["red", "green", "blue", "nir"]
+                    # + [f"LandCover_MODIS_Terra-Aqua_500m_{i}" for i in [9, 10, 11]]
+                ),
+                output_path=f"{self.local_root}/models/raster_classifier/v20",
             ),
         ]
 
