@@ -30,6 +30,26 @@ def metadata_v2(spark, tmp_path):
 
 
 @pytest.fixture
+def geolsh_graph_v1(spark, tmp_path):
+    graph_path = (tmp_path / "graph").as_posix()
+    df = spark.createDataFrame(
+        [
+            {
+                "srcDataset": "po",
+                "srcSurveyId": x,
+                "srcSpeciesId": x % 3,
+                "dstDataset": "po",
+                "dstSurveyId": (x + 1) % 10,
+                "dstSpeciesId": (x + 1) % 3,
+            }
+            for x in range(10)
+        ]
+    )
+    df.write.parquet(graph_path)
+    yield graph_path
+
+
+@pytest.fixture
 def raster_features(spark, tmp_path):
     raster_path = (tmp_path / "raster").as_posix()
     df = spark.createDataFrame(
