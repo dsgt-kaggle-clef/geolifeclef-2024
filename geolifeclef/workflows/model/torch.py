@@ -86,7 +86,7 @@ class TrainRasterClassifier(luigi.Task):
     feature_paths = luigi.ListParameter()
     feature_cols = luigi.ListParameter()
     output_path = luigi.Parameter()
-    batch_size = luigi.IntParameter(default=100)
+    batch_size = luigi.IntParameter(default=250)
     num_partitions = luigi.IntParameter(default=200)
 
     def output(self):
@@ -226,6 +226,8 @@ class Workflow(luigi.Task):
             # TODO: v19 - add more coefficients for landcover/modis
             #       fixed a very serious bug in the data module that throws off validation results
             # v20 - repeat v18 with fixed bug
+            # v21 - larger batch size 100 -> 250
+            # v22 - use coefficients to learn
             TrainRasterClassifier(
                 input_path=f"{self.local_root}/processed/metadata_clean/v2",
                 feature_paths=[
@@ -236,7 +238,7 @@ class Workflow(luigi.Task):
                     ["red", "green", "blue", "nir"]
                     # + [f"LandCover_MODIS_Terra-Aqua_500m_{i}" for i in [9, 10, 11]]
                 ),
-                output_path=f"{self.local_root}/models/raster_classifier/v20",
+                output_path=f"{self.local_root}/models/raster_classifier/v21",
             ),
         ]
 

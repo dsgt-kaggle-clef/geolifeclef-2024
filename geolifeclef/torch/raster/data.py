@@ -196,12 +196,10 @@ class RasterDataModel(pl.LightningDataModule):
         with warnings.catch_warnings():
             warnings.simplefilter(action="ignore", category=FutureWarning)
             self.converter_train = make_spark_converter(
-                self._prepare_dataframe(self.train_data),
-                compression_codec="snappy",
+                self._prepare_dataframe(self.train_data)
             )
             self.converter_valid = make_spark_converter(
-                self._prepare_dataframe(self.valid_data),
-                compression_codec="snappy",
+                self._prepare_dataframe(self.valid_data)
             )
 
     def get_transform(self, augment=True):
