@@ -173,23 +173,6 @@ class RasterDataModel(pl.LightningDataModule):
             vector_to_array("labels_sp").cast("array<boolean>").alias("label"),
         )
 
-    def compute_weights(self):
-        df = self.spark.read.parquet(self.input_path)
-        num_classes = int(
-            df.select(F.max("speciesId").alias("num_classes")).first().num_classes + 1
-        )
-        counts = (
-            df.where("speciesId is not null")
-            .groupBy("speciesId")
-            .agg(F.count("surveyId").alias("n"))
-            .orderBy("speciesId")
-            .collect()
-        )
-        vec = torch.ones(num_classes)
-        for count in counts:
-            vec[int(count.speciesId)] += count.n
-        return vec / vec.sum()
-
     def get_shape(self):
         row = self._prepare_dataframe(self.valid_data).first()
         num_layers = len(self.feature_col)

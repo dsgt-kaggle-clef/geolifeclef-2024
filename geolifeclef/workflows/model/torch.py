@@ -104,17 +104,13 @@ class TrainRasterClassifier(luigi.Task):
                 batch_size=self.batch_size,
                 num_partitions=self.num_partitions,
             )
-            weights = data_module.compute_weights()
             data_module.setup()
 
             # get parameters for the model
             num_layers, num_features, num_classes = data_module.get_shape()
-            assert weights.shape[0] == num_classes, (weights.shape, num_classes)
 
             # model module
-            model = RasterClassifier(
-                num_layers, num_features, num_classes, weights=weights
-            )
+            model = RasterClassifier(num_layers, num_features, num_classes)
 
             trainer = pl.Trainer(
                 max_epochs=20,
@@ -233,9 +229,11 @@ class Workflow(luigi.Task):
                 input_path=f"{self.local_root}/processed/metadata_clean/v2",
                 feature_paths=[
                     f"{self.local_root}/processed/tiles/pa-train/satellite/v3",
+                    f"{self.local_root}/processed/tiles/pa-train/LandCover/LandCover_MODIS_Terra-Aqua_500m/v3",
                 ],
-                feature_cols=["red", "green", "blue", "nir"],
-                output_path=f"{self.local_root}/models/raster_classifier/v18",
+                feature_cols=["red", "green", "blue", "nir"]
+                + [f"LandCover_MODIS_Terra-Aqua_500m_{i+1}" for i in range(5)],
+                output_path=f"{self.local_root}/models/raster_classifier/v19",
             ),
         ]
 
