@@ -29,7 +29,7 @@ class Raster2Vec(pl.LightningModule):
         self.num_features = num_features
         self.num_classes = num_classes
         self.weights = weights if weights is not None else torch.ones(num_classes)
-        self.learning_rate = 2e-3
+        self.learning_rate = 2e-5
         self.save_hyperparameters()
         # https://pytorch.org/vision/stable/models/generated/torchvision.models.efficientnet_v2_s.html#torchvision.models.efficientnet_v2_s
         # net = get_model("efficientnet_v2_s")
@@ -51,9 +51,12 @@ class Raster2Vec(pl.LightningModule):
             nn.Conv2d(num_layers, 1, kernel_size=1),
             nn.Flatten(),
             nn.Linear(num_features**2, hidden_layer_size),
-            nn.BatchNorm1d(hidden_layer_size),
         )
-        self.classifier_layer = nn.Linear(hidden_layer_size, num_classes)
+        self.classifier_layer = nn.Sequential(
+            nn.BatchNorm1d(hidden_layer_size),
+            nn.ReLU(inplace=True),
+            nn.Linear(hidden_layer_size, num_classes),
+        )
         # print the model architecture
         print(self.model, flush=True)
         self.f1_score = MultilabelF1Score(num_classes, average="micro")
@@ -61,7 +64,7 @@ class Raster2Vec(pl.LightningModule):
 
     def forward(self, x):
         z = self.model(x)
-        z = self.classifier_layer(F.relu(z))
+        z = self.classifier_layer(z)
         return z
 
     def configure_optimizers(self):
@@ -96,9 +99,11 @@ class Raster2Vec(pl.LightningModule):
         triplet, triple_n, triplet_d, triplet_nd = self.triplet_loss(
             *[x[k] for k in keys]
         )
-        loss = triplet + sum(asl.values())
-        self.log(f"{step_name}_loss", loss, prog_bar=True)
+        asl_sum = sum(asl.values())
+        loss = triplet + asl_sum
+        self.log(f"{step_name}_loss", loss, prog_bar=True, on_step=True, on_epoch=True)
         # all of the individual losses
+        self.log(f"{step_name}_asl_loss", asl_sum, on_step=False, on_epoch=True)
         for k, v in asl.items():
             self.log(f"{step_name}_{k}_asl_loss", v, on_step=False, on_epoch=True)
         self.log(f"{step_name}_triplet_loss", triplet, on_step=False, on_epoch=True)

@@ -13,6 +13,8 @@ from pytorch_lightning.loggers import WandbLogger
 
 from geolifeclef.torch.multilabel.data import GeoSpatialDataModel
 from geolifeclef.torch.multilabel.model import MultiLabelClassifier
+from geolifeclef.torch.raster2vec.data import Raster2VecDataModel
+from geolifeclef.torch.raster2vec.model import Raster2Vec
 from geolifeclef.torch.raster.data import RasterDataModel
 from geolifeclef.torch.raster.model import RasterClassifier
 from geolifeclef.utils import spark_resource
@@ -144,6 +146,66 @@ class TrainRasterClassifier(luigi.Task):
             trainer.fit(model, data_module)
 
 
+class TrainRaster2Vec(luigi.Task):
+    input_path = luigi.Parameter()
+    feature_paths = luigi.ListParameter()
+    feature_cols = luigi.ListParameter()
+    output_path = luigi.Parameter()
+    batch_size = luigi.IntParameter(default=250)
+    num_partitions = luigi.IntParameter(default=200)
+
+    def output(self):
+        # save the model run
+        return maybe_gcs_target(f"{self.output_path}/checkpoints/last.ckpt")
+
+    def run(self):
+        with spark_resource(memory="16g") as spark:
+            # data module
+            data_module = Raster2VecDataModel(
+                spark,
+                self.input_path,
+                self.feature_paths,
+                self.feature_cols,
+                batch_size=self.batch_size,
+                num_partitions=self.num_partitions,
+            )
+            data_module.setup()
+
+            num_layers, num_features, num_classes = data_module.get_shape()
+            model = Raster2Vec(num_layers, num_features, num_classes)
+
+            trainer = pl.Trainer(
+                max_epochs=20,
+                accelerator="gpu" if torch.cuda.is_available() else "cpu",
+                reload_dataloaders_every_n_epochs=1,
+                default_root_dir=self.output_path,
+                logger=WandbLogger(
+                    project="geolifeclef-2024",
+                    name="-".join(reversed(Path(self.output_path).parts[-2:])),
+                    group=Path(self.output_path).parts[-2],
+                    save_dir=self.output_path,
+                    config={
+                        "feature_paths": self.feature_paths,
+                        "feature_cols": self.feature_cols,
+                        "batch_size": self.batch_size,
+                        "input_path": self.input_path,
+                    },
+                ),
+                callbacks=[
+                    EarlyStopping(monitor="train_loss", mode="min"),
+                    # StochasticWeightAveraging(swa_lrs=1e-2),
+                    ModelCheckpoint(
+                        dirpath=os.path.join(self.output_path, "checkpoints"),
+                        monitor="val_loss",
+                        mode="min",
+                        save_last=True,
+                    ),
+                    # LearningRateFinder(),
+                ],
+            )
+            trainer.fit(model, data_module)
+
+
 class Workflow(luigi.Task):
     remote_root = luigi.Parameter(default="gs://dsgt-clef-geolifeclef-2024/data")
     local_root = luigi.Parameter(default="/mnt/data/geolifeclef-2024/data")
@@ -239,6 +301,15 @@ class Workflow(luigi.Task):
                     # + [f"LandCover_MODIS_Terra-Aqua_500m_{i}" for i in [9, 10, 11]]
                 ),
                 output_path=f"{self.local_root}/models/raster_classifier/v21",
+            ),
+            # v1 - initial model
+            TrainRaster2Vec(
+                input_path=f"{self.local_root}/processed/geolsh_graph/v1/edges/threshold=100000",
+                feature_paths=[
+                    f"{self.local_root}/processed/tiles/pa-train/satellite/v3",
+                ],
+                feature_cols=["red", "green", "blue", "nir"],
+                output_path=f"{self.local_root}/models/raster2vec/v1",
             ),
         ]
 

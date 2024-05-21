@@ -41,7 +41,7 @@ def test_raster_classifier_validation_model(
         geolsh_graph_v1,
         raster_feature_path,
         raster_feature_col,
-        batch_size=2,
+        batch_size=3,
         sample=1.0,
     )
     data_module.setup()

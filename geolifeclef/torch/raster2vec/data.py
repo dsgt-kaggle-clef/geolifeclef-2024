@@ -70,7 +70,7 @@ class IDCTransform(v2.Transform):
             X = batch["features"][k]
             zero_pad = torch.zeros(X.shape[0], X.shape[1], 128, 128, device=X.device)
             zero_pad[:, :, : X.shape[2], : X.shape[3]] = X
-            features[k] = dct.dct_2d(zero_pad)
+            features[k] = dct.idct_2d(zero_pad)
 
         return {
             "features": features,
@@ -126,7 +126,7 @@ class Raster2VecDataModel(pl.LightningDataModule):
         input_path,
         feature_paths,
         feature_col=["red", "green", "blue", "nir"],
-        sample=0.01,
+        sample=1.0,
         batch_size=32,
         num_partitions=32,
         workers_count=os.cpu_count(),
@@ -144,7 +144,6 @@ class Raster2VecDataModel(pl.LightningDataModule):
         self.batch_size = batch_size
         self.num_partitions = num_partitions
         self.workers_count = workers_count
-        self.seed = 42
         self.sample = sample
 
     def _load(self):
@@ -155,14 +154,16 @@ class Raster2VecDataModel(pl.LightningDataModule):
                 .distinct()
             )
 
-        edges = self.spark.read.parquet(self.input_path)
+        edges = self.spark.read.parquet(self.input_path).cache()
         edges.printSchema()
-        train_edges = self._sample_edges(edges, 1e6, 42, sample=self.sample).cache()
+        train_edges = self._sample_edges(
+            edges, 1e6, seed=42, sample=self.sample
+        ).cache()
         train_edges.printSchema()
         train_nodes = get_nodes(train_edges).cache()
         train_nodes.printSchema()
         valid_edges = self._sample_edges(
-            edges, 1e5, 108, sample=self.sample, filter=train_nodes
+            edges, 1e5, seed=108, sample=self.sample, filter=train_nodes
         ).cache()
 
         # now create the features and labels per survey
@@ -172,21 +173,29 @@ class Raster2VecDataModel(pl.LightningDataModule):
         df = nodes
         for feature_path in self.feature_paths:
             feature_df = self.spark.read.parquet(feature_path)
-            df = df.join(feature_df, on="surveyId")
+            df = df.join(
+                feature_df.select(
+                    F.col("surveyId").cast("integer").alias("surveyId"),
+                    *[x for x in feature_df.columns if x in self.feature_col],
+                ).distinct(),
+                on="surveyId",
+                how="inner",
+            )
         for col in self.feature_col:
             df = df.withColumn(col, array_to_vector(F.col(col).cast("array<float>")))
+
+        edges_subset = edges.join(
+            nodes.selectExpr("surveyId as srcSurveyId").distinct(),
+            how="inner",
+            on="srcSurveyId",
+        )
         data = (
             df.select("surveyId", *self.feature_col)
             .join(
                 # only keep data if it's in our neighborhood
-                self._get_labels(
-                    edges.join(
-                        nodes.selectExpr("surveyId as srcSurveyId"),
-                        how="inner",
-                        on="srcSurveyId",
-                    )
-                ),
+                self._get_labels(edges_subset),
                 on="surveyId",
+                how="left",
             )
             .cache()
         )
@@ -195,7 +204,7 @@ class Raster2VecDataModel(pl.LightningDataModule):
         data.printSchema()
         return (train_edges, valid_edges), nodes, data
 
-    def _sample_edges(self, edges, seed, limit, sample=0.01, filter=None):
+    def _sample_edges(self, edges, limit, seed=42, sample=0.01, filter=None):
         if filter is not None:
             edges = edges.join(
                 filter.selectExpr("surveyId as srcSurveyId"), how="left_anti"
@@ -204,8 +213,8 @@ class Raster2VecDataModel(pl.LightningDataModule):
             edges.where("srcDataset = 'po'")
             .where("dstDataset = 'po'")
             .selectExpr("srcSurveyId as src", "dstSurveyId as dst")
-            .distinct()
             .where("src != dst")
+            .distinct()
             .sample(sample, seed=seed)
             .limit(int(limit))
         )
@@ -228,7 +237,9 @@ class Raster2VecDataModel(pl.LightningDataModule):
         return res.select(
             "surveyId",
             vector_to_array("features", "float32").alias("features"),
-            vector_to_array("labels_sp").cast("array<boolean>").alias("label"),
+            vector_to_array("labels_sp", "float32")
+            .cast("array<boolean>")
+            .alias("label"),
         )
 
     def get_shape(self):
@@ -244,20 +255,20 @@ class Raster2VecDataModel(pl.LightningDataModule):
 
     def join_edge_data(self, edges, data):
         print("joining edges to data", flush=True)
-        edges.printSchema()
-        data.printSchema()
         return (
             edges.join(
                 data.selectExpr(
                     "surveyId as src", "features as src_features", "label as src_label"
-                ),
+                ).distinct(),
                 on="src",
+                how="inner",
             )
             .join(
                 data.selectExpr(
                     "surveyId as dst", "features as dst_features", "label as dst_label"
-                ),
+                ).distinct(),
                 on="dst",
+                how="inner",
             )
             .selectExpr(
                 "src as anchor_id",
@@ -271,6 +282,9 @@ class Raster2VecDataModel(pl.LightningDataModule):
 
     def setup(self, stage=None):
         (train_edges, valid_edges), _, data = self._load()
+        print(
+            "counts", train_edges.count(), valid_edges.count(), data.count(), flush=True
+        )
         self.train_data = self.join_edge_data(train_edges, data).cache()
         self.valid_data = self.join_edge_data(valid_edges, data).cache()
 
