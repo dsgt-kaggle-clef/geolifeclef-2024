@@ -23,6 +23,7 @@ class Raster2Vec(pl.LightningModule):
         num_classes: int,
         weights: Optional[torch.Tensor] = None,
         hidden_layer_size: int = 256,
+        disable_asl: bool = False,
     ):
         super().__init__()
         self.num_layers = num_layers
@@ -30,6 +31,7 @@ class Raster2Vec(pl.LightningModule):
         self.num_classes = num_classes
         self.weights = weights if weights is not None else torch.ones(num_classes)
         self.learning_rate = 2e-5
+        self.disable_asl = disable_asl
         self.save_hyperparameters()
         # https://pytorch.org/vision/stable/models/generated/torchvision.models.efficientnet_v2_s.html#torchvision.models.efficientnet_v2_s
         # net = get_model("efficientnet_v2_s")
@@ -94,18 +96,30 @@ class Raster2Vec(pl.LightningModule):
 
         # we do the loss for each of the items in our triplet
         keys = ["anchor", "neighbor", "distant"]
-        logits = {k: self(x[k]) for k in keys}
-        asl = {k: self.asl_loss(logits[k], y[k].to_dense()) for k in keys}
         triplet, triple_n, triplet_d, triplet_nd = self.triplet_loss(
             *[x[k] for k in keys]
         )
-        asl_sum = sum(asl.values())
-        loss = triplet + asl_sum
+        if not self.disable_asl:
+            logits = {k: self(x[k]) for k in keys}
+            asl = {k: self.asl_loss(logits[k], y[k].to_dense()) for k in keys}
+            asl_sum = sum(asl.values())
+            loss = triplet + asl_sum
+            # all of the individual losses
+            self.log(f"{step_name}_asl_loss", asl_sum, on_step=False, on_epoch=True)
+            for k, v in asl.items():
+                self.log(f"{step_name}_{k}_asl_loss", v, on_step=False, on_epoch=True)
+            # how do we track the f1 score? of each pair/triplet?
+            for k in keys:
+                self.log(
+                    f"{step_name}_{k}_f1",
+                    self.f1_score(logits[k], y[k].to_dense()),
+                    on_step=False,
+                    on_epoch=True,
+                )
+        else:
+            loss = triplet
+
         self.log(f"{step_name}_loss", loss, prog_bar=True, on_step=True, on_epoch=True)
-        # all of the individual losses
-        self.log(f"{step_name}_asl_loss", asl_sum, on_step=False, on_epoch=True)
-        for k, v in asl.items():
-            self.log(f"{step_name}_{k}_asl_loss", v, on_step=False, on_epoch=True)
         self.log(f"{step_name}_triplet_loss", triplet, on_step=False, on_epoch=True)
         for k, v in zip(
             ["triplet_n", "triplet_d", "triplet_nd"],
@@ -113,14 +127,6 @@ class Raster2Vec(pl.LightningModule):
         ):
             self.log(f"{step_name}_{k}_loss", v, on_step=False, on_epoch=True)
 
-        # how do we track the f1 score? of each pair/triplet?
-        for k in keys:
-            self.log(
-                f"{step_name}_{k}_f1",
-                self.f1_score(logits[k], y[k].to_dense()),
-                on_step=False,
-                on_epoch=True,
-            )
         return loss
 
     def training_step(self, batch, batch_idx):

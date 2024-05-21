@@ -174,7 +174,7 @@ class TrainRaster2Vec(luigi.Task):
             data_module.setup()
 
             num_layers, num_features, num_classes = data_module.get_shape()
-            model = Raster2Vec(num_layers, num_features, num_classes)
+            model = Raster2Vec(num_layers, num_features, num_classes, disable_asl=True)
 
             trainer = pl.Trainer(
                 max_epochs=20,
@@ -310,6 +310,8 @@ class Workflow(luigi.Task):
             # v2 - fix more bugs
             # v3 - use po dataset
             # v4 - use coefficient space and increase batch size
+            # v5 - disable asl loss
+            # v6 - redo, what happened?
             TrainRaster2Vec(
                 batch_size=500,
                 workers_count=16,
@@ -318,7 +320,7 @@ class Workflow(luigi.Task):
                     f"{self.local_root}/processed/tiles/po/satellite/v3",
                 ],
                 feature_cols=["red", "green", "blue", "nir"],
-                output_path=f"{self.local_root}/models/raster2vec/v4",
+                output_path=f"{self.local_root}/models/raster2vec/v6",
             ),
         ]
 

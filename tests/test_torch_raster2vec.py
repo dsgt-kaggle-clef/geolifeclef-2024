@@ -28,9 +28,16 @@ def test_raster_data_model(tmp_path, spark, geolsh_graph_v1, raster_features):
 
 # run this both gpu and cpu, but only the gpu if it's available
 # pytest parametrize
-@pytest.mark.parametrize("device", ["cpu", "gpu"])
+@pytest.mark.parametrize(
+    "device,disable_asl",
+    [
+        ["cpu", False],
+        ["gpu", False],
+        ["cpu", True],
+    ],
+)
 def test_raster_classifier_validation_model(
-    tmp_path, spark, geolsh_graph_v1, raster_features, device
+    tmp_path, spark, geolsh_graph_v1, raster_features, device, disable_asl
 ):
     if device == "gpu" and not torch.cuda.is_available():
         pytest.skip()
@@ -48,7 +55,7 @@ def test_raster_classifier_validation_model(
 
     # get parameters for the model
     num_layers, num_features, num_classes = data_module.get_shape()
-    model = Raster2Vec(num_layers, num_features, num_classes)
+    model = Raster2Vec(num_layers, num_features, num_classes, disable_asl=disable_asl)
 
     trainer = pl.Trainer(
         accelerator=device,

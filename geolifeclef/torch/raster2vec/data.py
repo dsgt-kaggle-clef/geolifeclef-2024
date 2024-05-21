@@ -245,15 +245,11 @@ class Raster2VecDataModel(pl.LightningDataModule):
             how="inner",
             on="srcSurveyId",
         )
-        data = (
-            df.select("surveyId", *self.feature_col)
-            .join(
-                # only keep data if it's in our neighborhood
-                self._get_labels(edges_subset),
-                on="surveyId",
-                how="left",
-            )
-            .cache()
+        data = df.select("surveyId", *self.feature_col).join(
+            # only keep data if it's in our neighborhood
+            self._get_labels(edges_subset),
+            on="surveyId",
+            how="left",
         )
         data.printSchema()
         data = self._prepare_dataframe(data).cache()
