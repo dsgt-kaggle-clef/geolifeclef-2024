@@ -78,7 +78,7 @@ class RasterClassifier(pl.LightningModule):
         return self.model(batch)
 
     def configure_optimizers(self):
-        optimizer = torch.optim.AdamW(self.parameters(), lr=self.learning_rate)
+        optimizer = torch.optim.Adam(self.parameters(), lr=self.learning_rate)
         return optimizer
 
     def _run_step(self, batch, batch_idx, step_name):

@@ -131,9 +131,9 @@ class TrainRasterClassifier(luigi.Task):
                     },
                 ),
                 callbacks=[
-                    EarlyStopping(monitor="val_loss", mode="min", min_delta=1e-4),
-                    EarlyStopping(monitor="val_f1", mode="max"),
-                    StochasticWeightAveraging(swa_lrs=1e-2),
+                    EarlyStopping(monitor="val_loss", mode="min"),
+                    # EarlyStopping(monitor="val_f1", mode="max"),
+                    # StochasticWeightAveraging(swa_lrs=1e-2),
                     ModelCheckpoint(
                         dirpath=os.path.join(self.output_path, "checkpoints"),
                         monitor="val_f1",
@@ -152,6 +152,7 @@ class TrainRaster2Vec(luigi.Task):
     feature_cols = luigi.ListParameter()
     output_path = luigi.Parameter()
     batch_size = luigi.IntParameter(default=250)
+    workers_count = luigi.IntParameter(default=8)
     num_partitions = luigi.IntParameter(default=200)
 
     def output(self):
@@ -168,6 +169,7 @@ class TrainRaster2Vec(luigi.Task):
                 self.feature_cols,
                 batch_size=self.batch_size,
                 num_partitions=self.num_partitions,
+                workers_count=self.workers_count,
             )
             data_module.setup()
 
@@ -229,6 +231,7 @@ class Workflow(luigi.Task):
                 dst_path=f"{self.local_root}/processed/{name}",
             )
             for name in [
+                "tiles/po/satellite",
                 "tiles/pa-train/satellite",
                 "tiles/pa-train/LandCover/LandCover_MODIS_Terra-Aqua_500m",
             ]
@@ -290,6 +293,7 @@ class Workflow(luigi.Task):
             # v20 - repeat v18 with fixed bug
             # v21 - larger batch size 100 -> 250
             # v22 - use coefficients to learn
+            # v23 - disable early stopping, disable swa
             TrainRasterClassifier(
                 input_path=f"{self.local_root}/processed/metadata_clean/v2",
                 feature_paths=[
@@ -300,16 +304,21 @@ class Workflow(luigi.Task):
                     ["red", "green", "blue", "nir"]
                     # + [f"LandCover_MODIS_Terra-Aqua_500m_{i}" for i in [9, 10, 11]]
                 ),
-                output_path=f"{self.local_root}/models/raster_classifier/v21",
+                output_path=f"{self.local_root}/models/raster_classifier/v23",
             ),
             # v1 - initial model
+            # v2 - fix more bugs
+            # v3 - use po dataset
+            # v4 - use coefficient space and increase batch size
             TrainRaster2Vec(
+                batch_size=500,
+                workers_count=16,
                 input_path=f"{self.local_root}/processed/geolsh_graph/v1/edges/threshold=100000",
                 feature_paths=[
-                    f"{self.local_root}/processed/tiles/pa-train/satellite/v3",
+                    f"{self.local_root}/processed/tiles/po/satellite/v3",
                 ],
                 feature_cols=["red", "green", "blue", "nir"],
-                output_path=f"{self.local_root}/models/raster2vec/v1",
+                output_path=f"{self.local_root}/models/raster2vec/v4",
             ),
         ]
 

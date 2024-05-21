@@ -99,6 +99,62 @@ class AugmentPairs(v2.Transform):
         }
 
 
+class DCTRandomRotation(v2.Transform):
+    def __init__(self, p=0.5):
+        self.p = p
+        super().__init__()
+
+    def forward(self, batch):
+        # just transpose the features
+        if torch.rand(1) < self.p:
+            batch = batch.transpose(-1, -2)
+        return batch
+
+
+class DCTRandomHorizontalFlip(v2.Transform):
+    def __init__(self, p=0.5):
+        self.p = p
+        self.odd_factor = -torch.ones((8, 8))
+        for i in range(0, 8, 2):
+            self.odd_factor[i, :] = 1
+        super().__init__()
+
+    def forward(self, batch):
+        # just flip the features
+        if torch.rand(1) < self.p:
+            batch = batch * self.odd_factor
+        return batch
+
+
+class DCTRandomVerticalFlip(DCTRandomHorizontalFlip):
+    def forward(self, batch):
+        # just flip the features
+        if torch.rand(1) < self.p:
+            batch = batch * self.odd_factor.T
+        return batch
+
+
+class AugmentDCTPairs(v2.Transform):
+    def __init__(self):
+        super().__init__()
+        self.transform = v2.Compose(
+            [
+                DCTRandomHorizontalFlip(),
+                DCTRandomVerticalFlip(),
+                DCTRandomRotation(),
+            ]
+        )
+
+    def forward(self, batch):
+        # apply the transform to both the anchor and the neighbor
+        return {
+            "features": {
+                k: self.transform(features) for k, features in batch["features"].items()
+            },
+            "label": batch["label"],
+        }
+
+
 class MiniBatchTriplet(v2.Transform):
     """Now that the we've applied randomization to our pairs, we simply a triple that's random from the batch."""
 
@@ -163,7 +219,7 @@ class Raster2VecDataModel(pl.LightningDataModule):
         train_nodes = get_nodes(train_edges).cache()
         train_nodes.printSchema()
         valid_edges = self._sample_edges(
-            edges, 1e5, seed=108, sample=self.sample, filter=train_nodes
+            edges, 5e4, seed=108, sample=self.sample
         ).cache()
 
         # now create the features and labels per survey
@@ -248,8 +304,8 @@ class Raster2VecDataModel(pl.LightningDataModule):
         return (
             num_layers,
             # int(np.sqrt(int(len(row.features)) // num_layers)),
-            128,
-            # 8,
+            # 128,
+            8,
             int(len(row.anchor_label)),
         )
 
@@ -298,8 +354,9 @@ class Raster2VecDataModel(pl.LightningDataModule):
         return v2.Compose(
             [
                 ToReshapedLayers(num_layers, 8),
-                IDCTransform(),
-                *([AugmentPairs()] if augment else []),
+                # IDCTransform(),
+                # *([AugmentPairs()] if augment else []),
+                *([AugmentDCTPairs()] if augment else []),
                 MiniBatchTriplet(),
             ]
         )
