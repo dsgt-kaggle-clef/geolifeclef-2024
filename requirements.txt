@@ -18,6 +18,7 @@ petastorm
 # this is a silly-limitation, would be nice to get rid of petastorm instead
 pyarrow==10.0.1
 wandb
+torch-dct
 
 tqdm
 contexttimer
