@@ -223,7 +223,6 @@ class TrainRaster2VecClassifier(luigi.Task):
     def output(self):
         return [
             maybe_gcs_target(f"{self.output_path}/checkpoints/last.ckpt"),
-            maybe_gcs_target(f"{self.output_path}/predictions.csv"),
         ]
 
     def run(self):
@@ -275,23 +274,6 @@ class TrainRaster2VecClassifier(luigi.Task):
                 ],
             )
             trainer.fit(model, data_module)
-
-            predictions = trainer.predict(model, data_module)
-
-            rows = []
-            for batch in predictions:
-                for surveyId, prediction in zip(
-                    batch["surveyId"], batch["predictions"]
-                ):
-                    row = {"surveyId": int(surveyId)}
-                    # get all the indices where value is greater than 0.5
-                    indices = torch.where(prediction > 0.5)
-                    row["predictions"] = " ".join(indices[0].tolist())
-                    rows.append(row)
-
-            df = pd.DataFrame(rows).sort_values("surveyId")
-            df.to_csv(f"{self.output_path}/predictions.csv", index=False)
-            print(df.head())
 
 
 class PredictRaster2VecClassifier(luigi.Task):
@@ -489,6 +471,19 @@ class Workflow(luigi.Task):
                 feature_cols=["red", "green", "blue", "nir"],
                 output_path=f"{self.local_root}/models/raster2vec_classifier/v1",
             ),
+            # for the other model with asl
+            TrainRaster2VecClassifier(
+                input_path=f"{self.local_root}/processed/metadata_clean/v2",
+                base_model=f"{self.local_root}/models/raster2vec/v4/checkpoints/last.ckpt",
+                feature_paths=[
+                    f"{self.local_root}/processed/tiles/pa-*/satellite/v3",
+                ],
+                feature_cols=["red", "green", "blue", "nir"],
+                output_path=f"{self.local_root}/models/raster2vec_classifier_asl/v1",
+            ),
+        ]
+
+        yield [
             PredictRaster2VecClassifier(
                 input_path=f"{self.local_root}/processed/metadata_clean/v2",
                 base_model=f"{self.local_root}/models/raster2vec_classifier/v1/checkpoints/last.ckpt",
@@ -497,6 +492,15 @@ class Workflow(luigi.Task):
                 ],
                 feature_cols=["red", "green", "blue", "nir"],
                 output_path=f"{self.local_root}/models/raster2vec_classifier/v1_pred",
+            ),
+            PredictRaster2VecClassifier(
+                input_path=f"{self.local_root}/processed/metadata_clean/v2",
+                base_model=f"{self.local_root}/models/raster2vec_classifier_asl/v1/checkpoints/last.ckpt",
+                feature_paths=[
+                    f"{self.local_root}/processed/tiles/pa-*/satellite/v3",
+                ],
+                feature_cols=["red", "green", "blue", "nir"],
+                output_path=f"{self.local_root}/models/raster2vec_classifier_asl/v1_pred",
             ),
         ]
 
