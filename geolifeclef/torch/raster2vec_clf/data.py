@@ -7,7 +7,7 @@ import torch
 import torch_dct as dct
 from petastorm.spark import SparkDatasetConverter, make_spark_converter
 from pyspark.ml.feature import VectorAssembler
-from pyspark.ml.functions import vector_to_array
+from pyspark.ml.functions import array_to_vector, vector_to_array
 from pyspark.ml.linalg import SparseVector, VectorUDT
 from pyspark.sql import functions as F
 from torchvision.transforms import v2
@@ -34,31 +34,28 @@ class ToReshapedLayers(v2.Transform):
         super().__init__()
 
     def forward(self, batch):
-        # stack the features together
-        return {
-            "features": batch["features"].view(
-                -1,
-                self.num_layers,
-                self.num_features,
-                self.num_features,
-            ),
-            "label": batch["label"].to_sparse(),
-        }
+        batch["features"] = batch["features"].view(
+            -1,
+            self.num_layers,
+            self.num_features,
+            self.num_features,
+        )
+        if "label" in batch:
+            batch["label"] = batch["label"].to_sparse()
+        return batch
 
 
 class IDCTransform(v2.Transform):
     def forward(self, batch):
-        features, label = batch["features"], batch["label"]
+        features = batch["features"]
         # put the features on a 128x128 grid
         zero_pad = torch.zeros(
             features.shape[0], features.shape[1], 128, 128, device=features.device
         )
         zero_pad[:, :, : features.shape[2], : features.shape[3]] = features
+        batch["features"] = dct.idct_2d(zero_pad)
 
-        return {
-            "features": dct.idct_2d(zero_pad),
-            "label": label,
-        }
+        return batch
 
 
 class DCTRandomRotation(v2.Transform):
@@ -96,7 +93,7 @@ class DCTRandomVerticalFlip(DCTRandomHorizontalFlip):
         return batch
 
 
-class RasterDataModel(pl.LightningDataModule):
+class Raster2VecClassifierDataModel(pl.LightningDataModule):
     def __init__(
         self,
         spark,
@@ -137,7 +134,7 @@ class RasterDataModel(pl.LightningDataModule):
                 feature_df.select(
                     F.col("surveyId").cast("integer").alias("surveyId"),
                     *[
-                        F.col(x).alias(self._normalize_column_name(x))
+                        array_to_vector(x).alias(self._normalize_column_name(x))
                         for x in feature_df.columns
                         if x in self.feature_col
                     ],
@@ -146,35 +143,42 @@ class RasterDataModel(pl.LightningDataModule):
                 how="inner",
             )
 
-        return df.select("surveyId", "label", "sample_id", *self.normalized_feature_col)
-
-    def _load_labels(self, df):
-        return (
-            df.withColumn("surveyId", F.col("surveyId").cast("integer"))
-            .groupBy("surveyId")
-            .agg(
-                vector_to_array(
-                    _collect_sparse_labels(F.collect_list("speciesId")),
-                    "float32",
-                )
-                .cast("array<boolean>")
-                .alias("label"),
-            )
-            .withColumn("sample_id", F.crc32(F.col("surveyId").cast("string")) % 100)
+        return df.select(
+            "surveyId", "dataset", "label", "sample_id", *self.normalized_feature_col
         )
 
-    def _prepare_dataframe(self, df):
+    def _load_labels(self, df):
+        surveys = (
+            df.select("surveyId", "dataset")
+            .distinct()
+            .withColumn("sample_id", F.crc32(F.col("surveyId").cast("string")) % 100)
+        )
+        labels = (
+            df.withColumn("surveyId", F.col("surveyId").cast("integer"))
+            .groupBy("surveyId")
+            .agg(_collect_sparse_labels(F.collect_list("speciesId")).alias("label"))
+        )
+        return surveys.join(labels, on="surveyId", how="left")
+
+    def _prepare_dataframe(self, df, include_labels=True):
         """Prepare the DataFrame for training by ensuring correct types and repartitioning"""
         asm = VectorAssembler(
-            inputCols=self.normalized_feature_col, outputCol="features"
+            inputCols=self.normalized_feature_col,
+            outputCol="features",
         )
         res = asm.transform(df)
         return res.select(
             "surveyId",
             vector_to_array("features", "float32").alias("features"),
-            vector_to_array("labels_sp", "float32")
-            .cast("array<boolean>")
-            .alias("label"),
+            *(
+                [
+                    vector_to_array("label", "float32")
+                    .cast("array<boolean>")
+                    .alias("label")
+                ]
+                if include_labels
+                else []
+            ),
         ).repartition(self.num_partitions)
 
     def get_shape(self):
@@ -191,8 +195,9 @@ class RasterDataModel(pl.LightningDataModule):
     def setup(self, stage=None):
         df = self._load()
         self.df = df
-        self.valid_data = df.where("sample_id >= 90")
-        self.train_data = df.where("sample_id < 90")
+        self.valid_data = df.where("dataset = 'pa_train'").where("sample_id >= 90")
+        self.train_data = df.where("dataset = 'pa_train'").where("sample_id < 90")
+        self.test_data = df.where("dataset = 'pa_test'")
 
         with warnings.catch_warnings():
             warnings.simplefilter(action="ignore", category=FutureWarning)
@@ -201,6 +206,9 @@ class RasterDataModel(pl.LightningDataModule):
             )
             self.converter_valid = make_spark_converter(
                 self._prepare_dataframe(self.valid_data)
+            )
+            self.converter_predict = make_spark_converter(
+                self._prepare_dataframe(self.test_data, include_labels=False)
             )
 
     def get_transform(self, augment=True):

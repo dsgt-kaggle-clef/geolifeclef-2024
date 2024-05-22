@@ -16,13 +16,13 @@ def metadata_v2(spark, tmp_path):
     df = spark.createDataFrame(
         [
             {
-                "dataset": "pa_train",
+                "dataset": ["pa_train", "pa_test"][x % 2],
                 "surveyId": x,
                 "lat_proj": 1,
                 "lon_proj": 1,
                 "speciesId": x % 3,
             }
-            for x in range(10)
+            for x in range(20)
         ]
     )
     df.write.parquet(metadata_path)
@@ -61,7 +61,7 @@ def raster_features(spark, tmp_path):
                 "blue": np.ones(64).tolist(),
                 "nir": np.ones(64).tolist(),
             }
-            for x in range(10)
+            for x in range(20)
         ]
     )
     df.write.parquet(raster_path)
@@ -73,7 +73,7 @@ def raster_features(spark, tmp_path):
                 "surveyId": x,
                 "other": np.ones(64).tolist(),
             }
-            for x in range(10)
+            for x in range(20)
         ]
     )
     df.write.parquet(other_raster_path)
