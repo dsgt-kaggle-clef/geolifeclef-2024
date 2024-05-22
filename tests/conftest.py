@@ -5,8 +5,8 @@ from geolifeclef.utils import spark_resource
 
 
 @pytest.fixture
-def spark():
-    with spark_resource() as spark:
+def spark(tmp_path):
+    with spark_resource(local_dir=tmp_path.as_posix()) as spark:
         yield spark
 
 
