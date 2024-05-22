@@ -193,7 +193,7 @@ class Raster2VecClassifierDataModel(pl.LightningDataModule):
         )
 
     def setup(self, stage=None):
-        df = self._load()
+        df = self._load().cache()
         self.df = df
         self.valid_data = df.where("dataset = 'pa_train'").where("sample_id >= 90")
         self.train_data = df.where("dataset = 'pa_train'").where("sample_id < 90")

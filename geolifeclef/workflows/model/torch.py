@@ -4,6 +4,7 @@ from pathlib import Path
 
 import luigi
 import luigi.contrib.gcs
+import pandas as pd
 import pytorch_lightning as pl
 import torch
 from pytorch_lightning.callbacks import LearningRateFinder, StochasticWeightAveraging
@@ -15,6 +16,8 @@ from geolifeclef.torch.multilabel.data import GeoSpatialDataModel
 from geolifeclef.torch.multilabel.model import MultiLabelClassifier
 from geolifeclef.torch.raster2vec.data import Raster2VecDataModel
 from geolifeclef.torch.raster2vec.model import Raster2Vec
+from geolifeclef.torch.raster2vec_clf.data import Raster2VecClassifierDataModel
+from geolifeclef.torch.raster2vec_clf.model import Raster2VecClassifier
 from geolifeclef.torch.raster.data import RasterDataModel
 from geolifeclef.torch.raster.model import RasterClassifier
 from geolifeclef.utils import spark_resource
@@ -208,6 +211,160 @@ class TrainRaster2Vec(luigi.Task):
             trainer.fit(model, data_module)
 
 
+class TrainRaster2VecClassifier(luigi.Task):
+    input_path = luigi.Parameter()
+    base_model = luigi.Parameter()
+    feature_paths = luigi.ListParameter()
+    feature_cols = luigi.ListParameter()
+    output_path = luigi.Parameter()
+    batch_size = luigi.IntParameter(default=250)
+    num_partitions = luigi.IntParameter(default=200)
+
+    def output(self):
+        return [
+            maybe_gcs_target(f"{self.output_path}/checkpoints/last.ckpt"),
+            maybe_gcs_target(f"{self.output_path}/predictions.csv"),
+        ]
+
+    def run(self):
+        with spark_resource() as spark:
+            # data module
+            data_module = Raster2VecClassifierDataModel(
+                spark,
+                self.input_path,
+                self.feature_paths,
+                self.feature_cols,
+                batch_size=self.batch_size,
+                num_partitions=self.num_partitions,
+            )
+            data_module.setup()
+
+            backbone = Raster2Vec.load_from_checkpoint(self.base_model)
+            num_layers, num_features, num_classes = data_module.get_shape()
+            model = Raster2VecClassifier(num_layers, num_features, num_classes)
+            model.model = backbone.model
+
+            trainer = pl.Trainer(
+                max_epochs=20,
+                accelerator="gpu" if torch.cuda.is_available() else "cpu",
+                reload_dataloaders_every_n_epochs=1,
+                default_root_dir=self.output_path,
+                logger=WandbLogger(
+                    project="geolifeclef-2024",
+                    name="-".join(reversed(Path(self.output_path).parts[-2:])),
+                    save_dir=self.output_path,
+                    config={
+                        "feature_paths": self.feature_paths,
+                        "feature_cols": self.feature_cols,
+                        "batch_size": self.batch_size,
+                        "input_path": self.input_path,
+                        "base_model": self.base_model,
+                    },
+                ),
+                callbacks=[
+                    EarlyStopping(monitor="val_loss", mode="min"),
+                    EarlyStopping(monitor="val_f1", mode="max"),
+                    # StochasticWeightAveraging(swa_lrs=1e-2),
+                    ModelCheckpoint(
+                        dirpath=os.path.join(self.output_path, "checkpoints"),
+                        monitor="val_f1",
+                        mode="max",
+                        save_last=True,
+                    ),
+                    LearningRateFinder(),
+                ],
+            )
+            trainer.fit(model, data_module)
+
+            predictions = trainer.predict(model, data_module)
+
+            rows = []
+            for batch in predictions:
+                for surveyId, prediction in zip(
+                    batch["surveyId"], batch["predictions"]
+                ):
+                    row = {"surveyId": int(surveyId)}
+                    # get all the indices where value is greater than 0.5
+                    indices = torch.where(prediction > 0.5)
+                    row["predictions"] = " ".join(indices[0].tolist())
+                    rows.append(row)
+
+            df = pd.DataFrame(rows).sort_values("surveyId")
+            df.to_csv(f"{self.output_path}/predictions.csv", index=False)
+            print(df.head())
+
+
+class PredictRaster2VecClassifier(luigi.Task):
+    input_path = luigi.Parameter()
+    base_model = luigi.Parameter()
+    feature_paths = luigi.ListParameter()
+    feature_cols = luigi.ListParameter()
+    output_path = luigi.Parameter()
+    batch_size = luigi.IntParameter(default=250)
+    num_partitions = luigi.IntParameter(default=200)
+
+    def output(self):
+        return [
+            maybe_gcs_target(f"{self.output_path}/predictions_topk.csv"),
+            maybe_gcs_target(f"{self.output_path}/predictions_threshold.csv"),
+        ]
+
+    def run(self):
+        with spark_resource() as spark:
+            # data module
+            data_module = Raster2VecClassifierDataModel(
+                spark,
+                self.input_path,
+                self.feature_paths,
+                self.feature_cols,
+                batch_size=self.batch_size,
+                num_partitions=self.num_partitions,
+            )
+            data_module.setup()
+
+            model = Raster2VecClassifier.load_from_checkpoint(self.base_model)
+
+            trainer = pl.Trainer(
+                accelerator="gpu" if torch.cuda.is_available() else "cpu",
+                reload_dataloaders_every_n_epochs=1,
+                default_root_dir=self.output_path,
+            )
+            predictions = trainer.predict(model, data_module)
+
+            rows = []
+            for batch in predictions:
+                for surveyId, prediction in zip(
+                    batch["surveyId"], batch["predictions"]
+                ):
+                    row = {"surveyId": int(surveyId)}
+                    # get all the top 20 indices
+                    indices = torch.argsort(prediction, descending=True)[:20]
+                    row["predictions_topk"] = " ".join(
+                        [str(x) for x in indices.tolist()]
+                    )
+                    row["predictions_sigmoid_topk"] = prediction[indices].tolist()
+                    # get all the indices where value is greater than 0.5
+                    indices = (prediction > 0.5).nonzero().flatten()
+                    row["predictions_threshold"] = " ".join(
+                        [str(x) for x in indices.tolist()]
+                    )
+                    rows.append(row)
+
+            df = pd.DataFrame(rows).sort_values("surveyId")
+            # rename predictions_topk to predictions
+            df[["surveyId", "predictions_topk"]].rename(
+                columns={"predictions_topk": "predictions"}
+            ).to_csv(f"{self.output_path}/predictions_topk.csv", index=False)
+
+            # same for predictions_threshold
+            df[["surveyId", "predictions_threshold"]].rename(
+                columns={"predictions_threshold": "predictions"}
+            ).to_csv(f"{self.output_path}/predictions_threshold.csv", index=False)
+
+            df.to_csv(f"{self.output_path}/predictions.csv", index=False)
+            print(df.head())
+
+
 class Workflow(luigi.Task):
     remote_root = luigi.Parameter(default="gs://dsgt-clef-geolifeclef-2024/data")
     local_root = luigi.Parameter(default="/mnt/data/geolifeclef-2024/data")
@@ -321,6 +478,25 @@ class Workflow(luigi.Task):
                 ],
                 feature_cols=["red", "green", "blue", "nir"],
                 output_path=f"{self.local_root}/models/raster2vec/v6",
+            ),
+            # v1 - embedding with no asl loss
+            TrainRaster2VecClassifier(
+                input_path=f"{self.local_root}/processed/metadata_clean/v2",
+                base_model=f"{self.local_root}/models/raster2vec/v6/checkpoints/last.ckpt",
+                feature_paths=[
+                    f"{self.local_root}/processed/tiles/pa-*/satellite/v3",
+                ],
+                feature_cols=["red", "green", "blue", "nir"],
+                output_path=f"{self.local_root}/models/raster2vec_classifier/v1",
+            ),
+            PredictRaster2VecClassifier(
+                input_path=f"{self.local_root}/processed/metadata_clean/v2",
+                base_model=f"{self.local_root}/models/raster2vec_classifier/v1/checkpoints/last.ckpt",
+                feature_paths=[
+                    f"{self.local_root}/processed/tiles/pa-*/satellite/v3",
+                ],
+                feature_cols=["red", "green", "blue", "nir"],
+                output_path=f"{self.local_root}/models/raster2vec_classifier/v1_pred",
             ),
         ]
 

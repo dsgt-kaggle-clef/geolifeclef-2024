@@ -78,6 +78,6 @@ class Raster2VecClassifier(pl.LightningModule):
 
     def predict_step(self, batch, batch_idx, dataloader_idx=None):
         return {
-            "predictions": F.softmax(self(batch["features"])),
+            "predictions": F.sigmoid(self(batch["features"])),
             "surveyId": batch["surveyId"],
         }
