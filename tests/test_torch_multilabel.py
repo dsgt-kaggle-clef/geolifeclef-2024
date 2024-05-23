@@ -32,7 +32,7 @@ def test_geospatial_data_model(tmp_path, spark, metadata_v2):
     dm = GeoSpatialDataModel(spark, metadata_v2)
     dm.setup()
     batch = next(dm.train_dataloader())
-    assert set(batch.keys()) == {"features", "label"}
+    assert set(batch.keys()) == {"surveyId", "features", "label"}
     assert batch["label"].device.type == "cpu"
 
 

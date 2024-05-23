@@ -1,15 +1,10 @@
-from typing import Optional
-
 import pytorch_lightning as pl
 import torch
-import torch.nn.functional
 import torch.nn.functional as F
-import torch_dct as dct
 from torch import nn
 from torchmetrics.classification import MultilabelF1Score
-from torchvision.models import get_model
 
-from ..losses import AsymmetricLossOptimized, Hill
+from ..losses import AsymmetricLossOptimized
 
 # https://www.kaggle.com/code/rejpalcz/best-loss-function-for-f1-score-metric
 # https://stackoverflow.com/questions/65318064/can-i-trainoptimize-on-f1-score-loss-with-pytorch
@@ -21,17 +16,13 @@ class Raster2VecClassifier(pl.LightningModule):
         num_layers: int,
         num_features: int,
         num_classes: int,
-        weights: Optional[torch.Tensor] = None,
         hidden_layer_size: int = 256,
-        disable_asl: bool = False,
     ):
         super().__init__()
         self.num_layers = num_layers
         self.num_features = num_features
         self.num_classes = num_classes
-        self.weights = weights if weights is not None else torch.ones(num_classes)
         self.learning_rate = 2e-5
-        self.disable_asl = disable_asl
         self.save_hyperparameters()
 
         self.model = nn.Sequential(
@@ -66,7 +57,7 @@ class Raster2VecClassifier(pl.LightningModule):
     def _run_step(self, batch, batch_idx, step_name):
         x, y = batch["features"], batch["label"]
         logits = self(x)
-        loss = self.asl_loss(logits, y)
+        loss = self.asl_loss(logits, y.to_dense())
         self.log(f"{step_name}_loss", loss, prog_bar=True, on_step=True, on_epoch=True)
         self.log(
             f"{step_name}_f1",
@@ -87,6 +78,6 @@ class Raster2VecClassifier(pl.LightningModule):
 
     def predict_step(self, batch, batch_idx, dataloader_idx=None):
         return {
-            "predictions": self(batch["features"]),
+            "predictions": F.sigmoid(self(batch["features"])),
             "surveyId": batch["surveyId"],
         }
