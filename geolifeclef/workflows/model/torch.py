@@ -94,6 +94,7 @@ class TrainRasterClassifier(luigi.Task):
     use_idct = luigi.BoolParameter(default=False)
     batch_size = luigi.IntParameter(default=250)
     num_partitions = luigi.IntParameter(default=200)
+    hidden_layer_size = luigi.IntParameter(default=256)
 
     def output(self):
         # save the model run
@@ -515,6 +516,39 @@ class Workflow(luigi.Task):
                 ),
                 output_path=f"{self.local_root}/models/raster_classifier/v24_rbgir_modis_bio_dct",
             ),
+            TrainRasterClassifier(
+                input_path=f"{self.local_root}/processed/metadata_clean/v2",
+                feature_paths=[
+                    f"{self.local_root}/processed/tiles/pa-*/satellite/v3",
+                    f"{self.local_root}/processed/tiles/pa-*/LandCover/LandCover_MODIS_Terra-Aqua_500m/v3",
+                    f"{self.local_root}/processed/tiles/pa-*/BioClimatic_Average_1981-2010/bio1/v3",
+                    f"{self.local_root}/processed/tiles/pa-*/BioClimatic_Average_1981-2010/bio10/v3",
+                    f"{self.local_root}/processed/tiles/pa-*/BioClimatic_Average_1981-2010/bio19/v3",
+                ],
+                feature_cols=(
+                    ["red", "green", "blue", "nir"]
+                    + [f"LandCover_MODIS_Terra-Aqua_500m_{i}" for i in [9, 10, 11]]
+                    + [f"bio{i}" for i in [1, 10, 19]]
+                ),
+                hidden_layer_size=2048,
+                output_path=f"{self.local_root}/models/raster_classifier/v24_rbgir_modis_bio_dct_2k",
+            ),
+            TrainRasterClassifier(
+                input_path=f"{self.local_root}/processed/metadata_clean/v2",
+                feature_paths=[
+                    f"{self.local_root}/processed/tiles/pa-*/satellite/v3",
+                    f"{self.local_root}/processed/tiles/pa-*/LandCover/LandCover_MODIS_Terra-Aqua_500m/v3",
+                    f"{self.local_root}/processed/tiles/pa-*/BioClimatic_Average_1981-2010/bio1/v3",
+                    f"{self.local_root}/processed/tiles/pa-*/BioClimatic_Average_1981-2010/bio10/v3",
+                    f"{self.local_root}/processed/tiles/pa-*/BioClimatic_Average_1981-2010/bio19/v3",
+                ],
+                feature_cols=(
+                    ["red", "green", "blue", "nir"]
+                    + [f"LandCover_MODIS_Terra-Aqua_500m_{i}" for i in [9, 10, 11]]
+                    + [f"bio{i}" for i in [1, 10, 19]]
+                ),
+                output_path=f"{self.local_root}/models/raster_classifier/v24_rbgir_modis_bio_idct",
+            ),
             # v1 - initial model
             # v2 - fix more bugs
             # v3 - use po dataset
@@ -563,6 +597,20 @@ class Workflow(luigi.Task):
                 ],
                 feature_cols=["red", "green", "blue", "nir"],
                 output_path=f"{self.local_root}/models/raster_classifier/v24_rbgir_dct_pred",
+            ),
+            PredictClassifier(
+                input_path=f"{self.local_root}/processed/metadata_clean/v2",
+                model_name="raster",
+                base_model=f"{self.local_root}/models/raster_classifier/v24_rbgir_modis_dct/checkpoints/last.ckpt",
+                feature_paths=[
+                    f"{self.local_root}/processed/tiles/pa-*/satellite/v3",
+                    f"{self.local_root}/processed/tiles/pa-*/LandCover/LandCover_MODIS_Terra-Aqua_500m/v3",
+                ],
+                feature_cols=(
+                    ["red", "green", "blue", "nir"]
+                    + [f"LandCover_MODIS_Terra-Aqua_500m_{i}" for i in [9, 10, 11]]
+                ),
+                output_path=f"{self.local_root}/models/raster_classifier/v24_rbgir_modis_dct_pred",
             ),
             PredictClassifier(
                 input_path=f"{self.local_root}/processed/metadata_clean/v2",
