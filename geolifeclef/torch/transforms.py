@@ -30,6 +30,9 @@ class ToReshapedLayers(v2.Transform):
     def forward(self, batch):
         if self.features is not None:
             features = torch.stack([batch[col] for col in self.features])
+            # delete the features from the batch now
+            for col in self.features:
+                del batch[col]
         else:
             features = batch["features"]
 

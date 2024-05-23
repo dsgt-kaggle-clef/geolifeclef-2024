@@ -100,7 +100,9 @@ class TrainRasterClassifier(luigi.Task):
         return maybe_gcs_target(f"{self.output_path}/checkpoints/last.ckpt")
 
     def run(self):
-        with spark_resource() as spark:
+        with spark_resource(
+            **{"spark.sql.parquet.enableVectorizedReader": False}
+        ) as spark:
             # data module
             data_module = RasterDataModel(
                 spark,
@@ -225,7 +227,9 @@ class TrainRaster2VecClassifier(luigi.Task):
         ]
 
     def run(self):
-        with spark_resource() as spark:
+        with spark_resource(
+            **{"spark.sql.parquet.enableVectorizedReader": False}
+        ) as spark:
             data_module = RasterDataModel(
                 spark,
                 self.input_path,
@@ -292,7 +296,9 @@ class PredictClassifier(luigi.Task):
         ]
 
     def run(self):
-        with spark_resource() as spark:
+        with spark_resource(
+            **{"spark.sql.parquet.enableVectorizedReader": False}
+        ) as spark:
             # data module
             data_module = Raster2VecClassifierDataModel(
                 spark,
@@ -378,7 +384,12 @@ class Workflow(luigi.Task):
             for name in [
                 "tiles/po/satellite",
                 "tiles/pa-train/satellite",
+                "tiles/pa-test/satellite",
                 "tiles/pa-train/LandCover/LandCover_MODIS_Terra-Aqua_500m",
+                "tiles/pa-test/LandCover/LandCover_MODIS_Terra-Aqua_500m",
+                "tiles/pa-train/BioClimatic_Average_1981-2010",
+                "tiles/pa-test/BioClimatic_Average_1981-2010",
+                "dct_timeseries/combined_timeseries_v2",
             ]
         ]
 
@@ -463,6 +474,46 @@ class Workflow(luigi.Task):
                     # + [f"LandCover_MODIS_Terra-Aqua_500m_{i}" for i in [9, 10, 11]]
                 ),
                 output_path=f"{self.local_root}/models/raster_classifier/v24_rbgir_dct",
+            ),
+            TrainRasterClassifier(
+                input_path=f"{self.local_root}/processed/metadata_clean/v2",
+                feature_paths=[
+                    f"{self.local_root}/processed/tiles/pa-*/satellite/v3",
+                    f"{self.local_root}/processed/tiles/pa-*/LandCover/LandCover_MODIS_Terra-Aqua_500m/v3",
+                ],
+                feature_cols=(
+                    ["red", "green", "blue", "nir"]
+                    + [f"LandCover_MODIS_Terra-Aqua_500m_{i}" for i in [9, 10, 11]]
+                ),
+                output_path=f"{self.local_root}/models/raster_classifier/v24_rbgir_modis_dct",
+            ),
+            TrainRasterClassifier(
+                input_path=f"{self.local_root}/processed/metadata_clean/v2",
+                feature_paths=[
+                    f"{self.local_root}/processed/tiles/pa-*/satellite/v3",
+                    f"{self.local_root}/processed/tiles/pa-*/LandCover/LandCover_MODIS_Terra-Aqua_500m/v3",
+                ],
+                feature_cols=(
+                    ["red", "green", "blue", "nir"]
+                    + [f"LandCover_MODIS_Terra-Aqua_500m_{i+1}" for i in range(13)]
+                ),
+                output_path=f"{self.local_root}/models/raster_classifier/v24_rbgir_modis_full_dct",
+            ),
+            TrainRasterClassifier(
+                input_path=f"{self.local_root}/processed/metadata_clean/v2",
+                feature_paths=[
+                    f"{self.local_root}/processed/tiles/pa-*/satellite/v3",
+                    f"{self.local_root}/processed/tiles/pa-*/LandCover/LandCover_MODIS_Terra-Aqua_500m/v3",
+                    f"{self.local_root}/processed/tiles/pa-*/BioClimatic_Average_1981-2010/bio1/v3",
+                    f"{self.local_root}/processed/tiles/pa-*/BioClimatic_Average_1981-2010/bio10/v3",
+                    f"{self.local_root}/processed/tiles/pa-*/BioClimatic_Average_1981-2010/bio19/v3",
+                ],
+                feature_cols=(
+                    ["red", "green", "blue", "nir"]
+                    + [f"LandCover_MODIS_Terra-Aqua_500m_{i}" for i in [9, 10, 11]]
+                    + [f"bio{i}" for i in [1, 10, 19]]
+                ),
+                output_path=f"{self.local_root}/models/raster_classifier/v24_rbgir_modis_bio_dct",
             ),
             # v1 - initial model
             # v2 - fix more bugs

@@ -63,7 +63,7 @@ class RasterDataModel(pl.LightningDataModule):
                 feature_df.select(
                     F.col("surveyId").cast("integer").alias("surveyId"),
                     *[
-                        array_to_vector(x).alias(self._normalize_column_name(x))
+                        F.col(x).alias(self._normalize_column_name(x))
                         for x in feature_df.columns
                         if x in self.feature_col
                     ],
@@ -91,14 +91,15 @@ class RasterDataModel(pl.LightningDataModule):
 
     def _prepare_dataframe(self, df, include_labels=True):
         """Prepare the DataFrame for training by ensuring correct types and repartitioning"""
-        asm = VectorAssembler(
-            inputCols=self.normalized_feature_col,
-            outputCol="features",
-        )
-        res = asm.transform(df)
-        return res.select(
+        # asm = VectorAssembler(
+        #     inputCols=self.normalized_feature_col,
+        #     outputCol="features",
+        # )
+        # res = asm.transform(df)
+        return df.select(
             "surveyId",
-            vector_to_array("features", "float32").alias("features"),
+            *self.normalized_feature_col,
+            # vector_to_array("features", "float32").alias("features"),
             *(
                 [
                     vector_to_array("label", "float32")
@@ -142,7 +143,7 @@ class RasterDataModel(pl.LightningDataModule):
         num_layers, _, _ = self.get_shape()
         return v2.Compose(
             [
-                ToReshapedLayers(num_layers, 8),
+                ToReshapedLayers(num_layers, 8, features=self.normalized_feature_col),
                 *([IDCTransform()] if self.use_idct else []),
                 *(
                     (
