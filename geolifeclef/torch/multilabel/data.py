@@ -1,40 +1,36 @@
 import os
-from collections import Counter
 from pathlib import Path
 
-import numpy as np
 import pytorch_lightning as pl
 import torch
 from petastorm.spark import SparkDatasetConverter, make_spark_converter
-from pyspark.ml import Pipeline
 from pyspark.ml.feature import VectorAssembler
 from pyspark.ml.functions import vector_to_array
-from pyspark.ml.linalg import SparseVector, VectorUDT
 from pyspark.sql import functions as F
 from torchvision.transforms import v2
 
-
-def _collect_sparse_labels(array):
-    """Turn a list of numbers into a sparse vector."""
-    max_species = 11255
-
-    @F.udf(VectorUDT())
-    def func(array):
-        if not array:
-            return SparseVector(max_species, [])
-        return SparseVector(max_species, sorted(Counter(array).items()))
-
-    return func(array)
+from geolifeclef.torch.transforms import collect_sparse_labels
 
 
 # create a transform to convert a list of numbers into a sparse tensor
 class ToSparseTensor(v2.Transform):
     def forward(self, batch):
-        features, label = batch["features"], batch["label"]
-        return {
-            "features": features.to(features.device),
-            "label": label.to_sparse().to(label.device),
-        }
+        if "label" in batch:
+            batch["label"] = batch["label"].to_sparse()
+        return batch
+
+
+class AddNoise(v2.Transform):
+    def __init__(self, noise=5_000):
+        super().__init__()
+        # add 5km of noise to the featurse
+        self.noise = noise
+
+    def forward(self, batch):
+        batch["features"] = (
+            batch["features"] + torch.randn_like(batch["features"]) * self.noise
+        )
+        return batch
 
 
 class GeoSpatialDataModel(pl.LightningDataModule):
@@ -63,7 +59,7 @@ class GeoSpatialDataModel(pl.LightningDataModule):
 
         df = spark.read.parquet(self.input_path)
         if pa_only:
-            df = df.where("dataset = 'pa_train'")
+            df = df.where(F.col("dataset").like("pa%"))
         self.df = df.cache()
 
     def _load(self):
@@ -77,15 +73,17 @@ class GeoSpatialDataModel(pl.LightningDataModule):
             .agg(F.countDistinct("speciesId").alias("n_species"))
             .where("n_species > 5")
             .select("surveyId")
-        ).union(self.df.where("dataset='pa_train'").select("surveyId").distinct())
+        ).union(
+            self.df.where(F.col("dataset").like("pa%")).select("surveyId").distinct()
+        )
 
         return (
-            self.df.join(subset, on="surveyId")
+            self.df.join(subset, on="surveyId", how="right")
             .groupBy("surveyId")
             .agg(
                 F.mean("lat_proj").alias("lat_proj"),
                 F.mean("lon_proj").alias("lon_proj"),
-                _collect_sparse_labels(
+                collect_sparse_labels(
                     F.collect_list("speciesId").cast("array<short>")
                 ).alias("labels_sp"),
                 F.first("dataset").alias("dataset"),
@@ -93,20 +91,18 @@ class GeoSpatialDataModel(pl.LightningDataModule):
             .withColumn("sample_id", F.crc32(F.col("surveyId").cast("string")) % 100)
         )
 
-    def _prepare_dataframe(self, df):
+    def _prepare_dataframe(self, df, include_label=True):
         """Prepare the DataFrame for training by ensuring correct types and repartitioning"""
-        pipeline = Pipeline(
-            stages=[
-                VectorAssembler(
-                    inputCols=self.feature_col,
-                    outputCol="features",
-                )
-            ]
-        )
-        res = pipeline.fit(df).transform(df)
+        asm = VectorAssembler(inputCols=self.feature_col, outputCol="features")
+        res = asm.transform(df)
         return res.select(
+            "surveyId",
             vector_to_array("features").alias("features"),
-            vector_to_array("labels_sp").cast("array<boolean>").alias("label"),
+            *(
+                [vector_to_array("labels_sp").cast("array<boolean>").alias("label")]
+                if include_label
+                else []
+            ),
         )
 
     def compute_weights(self):
@@ -138,6 +134,9 @@ class GeoSpatialDataModel(pl.LightningDataModule):
             .repartition(self.num_partitions)
             .cache()
         )
+        self.predict_data = (
+            df.where("dataset='pa_test'").repartition(self.num_partitions).cache()
+        )
 
         self.converter_train = make_spark_converter(
             self._prepare_dataframe(self.train_data)
@@ -145,25 +144,37 @@ class GeoSpatialDataModel(pl.LightningDataModule):
         self.converter_valid = make_spark_converter(
             self._prepare_dataframe(self.valid_data)
         )
-        self.transform = v2.Compose([ToSparseTensor()])
+        self.converter_predict = make_spark_converter(
+            self._prepare_dataframe(self.predict_data, include_label=False)
+        )
 
     def get_shape(self):
         row = self._prepare_dataframe(self.valid_data).first()
         return int(len(row.features)), int(len(row.label))
 
-    def _dataloader(self, converter):
+    def _dataloader(self, converter, augment=True):
+        transform = v2.Compose(
+            [
+                ToSparseTensor(),
+                *([AddNoise()] if augment else []),
+            ]
+        )
         with converter.make_torch_dataloader(
             batch_size=self.batch_size,
             num_epochs=1,
             workers_count=self.workers_count,
         ) as dataloader:
             for batch in dataloader:
-                yield self.transform(batch)
+                yield transform(batch)
 
     def train_dataloader(self):
         for batch in self._dataloader(self.converter_train):
             yield batch
 
     def val_dataloader(self):
-        for batch in self._dataloader(self.converter_valid):
+        for batch in self._dataloader(self.converter_valid, augment=False):
+            yield batch
+
+    def predict_dataloader(self):
+        for batch in self._dataloader(self.converter_predict, augment=False):
             yield batch

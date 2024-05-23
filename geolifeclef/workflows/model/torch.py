@@ -7,7 +7,7 @@ import luigi.contrib.gcs
 import pandas as pd
 import pytorch_lightning as pl
 import torch
-from pytorch_lightning.callbacks import LearningRateFinder, StochasticWeightAveraging
+from pytorch_lightning.callbacks import LearningRateFinder
 from pytorch_lightning.callbacks.early_stopping import EarlyStopping
 from pytorch_lightning.callbacks.model_checkpoint import ModelCheckpoint
 from pytorch_lightning.loggers import WandbLogger
@@ -84,6 +84,75 @@ class TrainMultiLabelClassifier(luigi.Task):
                 ],
             )
             trainer.fit(model, data_module)
+
+
+class PredictMultiLabelClassifier(luigi.Task):
+    input_path = luigi.Parameter()
+    base_model = luigi.Parameter()
+    output_path = luigi.Parameter()
+    batch_size = luigi.IntParameter(default=128)
+    num_partitions = luigi.IntParameter(default=200)
+
+    def output(self):
+        return [
+            maybe_gcs_target(f"{self.output_path}/predictions_topk.csv"),
+            maybe_gcs_target(f"{self.output_path}/predictions_threshold.csv"),
+        ]
+
+    def run(self):
+        with spark_resource(
+            **{"spark.sql.parquet.enableVectorizedReader": False}
+        ) as spark:
+            data_module = GeoSpatialDataModel(
+                spark,
+                self.input_path,
+                batch_size=self.batch_size,
+                num_partitions=self.num_partitions,
+                pa_only=True,
+            )
+            data_module.setup()
+            model = MultiLabelClassifier.load_from_checkpoint(self.base_model)
+
+            trainer = pl.Trainer(
+                max_epochs=20,
+                accelerator="gpu" if torch.cuda.is_available() else "cpu",
+                default_root_dir=self.output_path,
+            )
+            predictions = trainer.predict(model, data_module)
+
+            rows = []
+            for batch in predictions:
+                for surveyId, prediction in zip(
+                    batch["surveyId"], batch["predictions"]
+                ):
+                    row = {"surveyId": int(surveyId)}
+                    # get all the top 20 indices
+                    indices = torch.argsort(prediction, descending=True)[:20]
+                    row["predictions_topk"] = " ".join(
+                        [str(x) for x in indices.tolist()]
+                    )
+                    row["predictions_sigmoid_topk"] = prediction[indices].tolist()
+                    # get all the indices where value is greater than 0.5
+                    indices = (prediction > 0.5).nonzero().flatten()
+                    row["predictions_threshold"] = " ".join(
+                        [str(x) for x in indices.tolist()]
+                    )
+                    rows.append(row)
+
+            print(rows[:3])
+            df = pd.DataFrame(rows).sort_values("surveyId")
+            # rename predictions_topk to predictions
+            df[["surveyId", "predictions_topk"]].rename(
+                columns={"predictions_topk": "predictions"}
+            ).to_csv(f"{self.output_path}/predictions_topk.csv", index=False)
+
+            # same for predictions_threshold
+            df[["surveyId", "predictions_threshold"]].rename(
+                columns={"predictions_threshold": "predictions"}
+            ).to_csv(f"{self.output_path}/predictions_threshold.csv", index=False)
+
+            df.to_csv(f"{self.output_path}/predictions.csv", index=False)
+            print(df.head())
 
 
 class TrainRasterClassifier(luigi.Task):
@@ -421,9 +490,11 @@ class Workflow(luigi.Task):
             # v13 - hill loss, but with batch norm because loss is nan
             # v14 - sigmoidf1 loss - not as great as I would have wanted
             # v15 - ASL loss again
+            # v16 - Add 5km of noise to the coordinates (its okay)
+            # v17 - fix bug with adding noise to validation/prediction
             TrainMultiLabelClassifier(
                 input_path=f"{self.local_root}/processed/metadata_clean/v2",
-                output_path=f"{self.local_root}/models/multilabel_classifier/v15",
+                output_path=f"{self.local_root}/models/multilabel_classifier/v17",
             ),
             # v1 - first model, 18it/s on epoch 0, 69it/s on epoch 1+
             # v2 - flatten the input
@@ -588,6 +659,11 @@ class Workflow(luigi.Task):
         ]
 
         yield [
+            PredictMultiLabelClassifier(
+                input_path=f"{self.local_root}/processed/metadata_clean/v2",
+                base_model=f"{self.local_root}/models/multilabel_classifier/v17/checkpoints/last.ckpt",
+                output_path=f"{self.local_root}/models/multilabel_classifier/v17_pred",
+            ),
             PredictClassifier(
                 input_path=f"{self.local_root}/processed/metadata_clean/v2",
                 model_name="raster",

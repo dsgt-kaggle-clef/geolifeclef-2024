@@ -2,7 +2,7 @@ from typing import Optional
 
 import pytorch_lightning as pl
 import torch
-import torch.nn.functional
+import torch.nn.functional as F
 from torch import nn
 from torchmetrics.classification import MultilabelF1Score
 
@@ -64,3 +64,9 @@ class MultiLabelClassifier(pl.LightningModule):
 
     def test_step(self, batch, batch_idx):
         return self._run_step(batch, batch_idx, "test")
+
+    def predict_step(self, batch, batch_idx, dataloader_idx=None):
+        return {
+            "predictions": F.sigmoid(self(batch["features"])),
+            "surveyId": batch["surveyId"],
+        }
