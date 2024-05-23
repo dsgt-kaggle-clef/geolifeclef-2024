@@ -2,13 +2,11 @@ from typing import Optional
 
 import pytorch_lightning as pl
 import torch
-import torch.nn.functional
-import torch_dct as dct
+import torch.nn.functional as F
 from torch import nn
 from torchmetrics.classification import MultilabelF1Score
-from torchvision.models import get_model
 
-from ..losses import AsymmetricLossOptimized, Hill
+from ..losses import AsymmetricLossOptimized
 
 # https://www.kaggle.com/code/rejpalcz/best-loss-function-for-f1-score-metric
 # https://stackoverflow.com/questions/65318064/can-i-trainoptimize-on-f1-score-loss-with-pytorch
@@ -104,3 +102,9 @@ class RasterClassifier(pl.LightningModule):
 
     def test_step(self, batch, batch_idx):
         return self._run_step(batch, batch_idx, "test")
+
+    def predict_step(self, batch, batch_idx, dataloader_idx=None):
+        return {
+            "predictions": F.sigmoid(self(batch["features"])),
+            "surveyId": batch["surveyId"],
+        }

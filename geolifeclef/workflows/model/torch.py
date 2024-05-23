@@ -91,6 +91,7 @@ class TrainRasterClassifier(luigi.Task):
     feature_paths = luigi.ListParameter()
     feature_cols = luigi.ListParameter()
     output_path = luigi.Parameter()
+    use_idct = luigi.BoolParameter(default=False)
     batch_size = luigi.IntParameter(default=250)
     num_partitions = luigi.IntParameter(default=200)
 
@@ -106,15 +107,13 @@ class TrainRasterClassifier(luigi.Task):
                 self.input_path,
                 self.feature_paths,
                 self.feature_cols,
+                use_idct=self.use_idct,
                 batch_size=self.batch_size,
                 num_partitions=self.num_partitions,
             )
             data_module.setup()
 
-            # get parameters for the model
             num_layers, num_features, num_classes = data_module.get_shape()
-
-            # model module
             model = RasterClassifier(num_layers, num_features, num_classes)
 
             trainer = pl.Trainer(
@@ -135,7 +134,7 @@ class TrainRasterClassifier(luigi.Task):
                 ),
                 callbacks=[
                     EarlyStopping(monitor="val_loss", mode="min"),
-                    # EarlyStopping(monitor="val_f1", mode="max"),
+                    EarlyStopping(monitor="val_f1", mode="max"),
                     # StochasticWeightAveraging(swa_lrs=1e-2),
                     ModelCheckpoint(
                         dirpath=os.path.join(self.output_path, "checkpoints"),
@@ -227,8 +226,7 @@ class TrainRaster2VecClassifier(luigi.Task):
 
     def run(self):
         with spark_resource() as spark:
-            # data module
-            data_module = Raster2VecClassifierDataModel(
+            data_module = RasterDataModel(
                 spark,
                 self.input_path,
                 self.feature_paths,
@@ -276,9 +274,11 @@ class TrainRaster2VecClassifier(luigi.Task):
             trainer.fit(model, data_module)
 
 
-class PredictRaster2VecClassifier(luigi.Task):
+class PredictClassifier(luigi.Task):
     input_path = luigi.Parameter()
     base_model = luigi.Parameter()
+    model_name = luigi.ChoiceParameter(choices=["raster", "raster2vec"])
+    use_idct = luigi.BoolParameter(default=False)
     feature_paths = luigi.ListParameter()
     feature_cols = luigi.ListParameter()
     output_path = luigi.Parameter()
@@ -299,12 +299,18 @@ class PredictRaster2VecClassifier(luigi.Task):
                 self.input_path,
                 self.feature_paths,
                 self.feature_cols,
+                use_idct=self.use_idct,
                 batch_size=self.batch_size,
                 num_partitions=self.num_partitions,
             )
             data_module.setup()
 
-            model = Raster2VecClassifier.load_from_checkpoint(self.base_model)
+            model_cls = {
+                "raster": RasterClassifier,
+                "raster2vec": Raster2VecClassifier,
+            }[self.model_name]
+
+            model = model_cls.load_from_checkpoint(self.base_model)
 
             trainer = pl.Trainer(
                 accelerator="gpu" if torch.cuda.is_available() else "cpu",
@@ -445,6 +451,19 @@ class Workflow(luigi.Task):
                 ),
                 output_path=f"{self.local_root}/models/raster_classifier/v23",
             ),
+            # v24 - train for predictions
+            TrainRasterClassifier(
+                input_path=f"{self.local_root}/processed/metadata_clean/v2",
+                feature_paths=[
+                    f"{self.local_root}/processed/tiles/pa-*/satellite/v3",
+                    # f"{self.local_root}/processed/tiles/pa-train/LandCover/LandCover_MODIS_Terra-Aqua_500m/v3",
+                ],
+                feature_cols=(
+                    ["red", "green", "blue", "nir"]
+                    # + [f"LandCover_MODIS_Terra-Aqua_500m_{i}" for i in [9, 10, 11]]
+                ),
+                output_path=f"{self.local_root}/models/raster_classifier/v24_rbgir_dct",
+            ),
             # v1 - initial model
             # v2 - fix more bugs
             # v3 - use po dataset
@@ -484,8 +503,19 @@ class Workflow(luigi.Task):
         ]
 
         yield [
-            PredictRaster2VecClassifier(
+            PredictClassifier(
                 input_path=f"{self.local_root}/processed/metadata_clean/v2",
+                model_name="raster",
+                base_model=f"{self.local_root}/models/raster_classifier/v24_rbgir_dct/checkpoints/last.ckpt",
+                feature_paths=[
+                    f"{self.local_root}/processed/tiles/pa-*/satellite/v3",
+                ],
+                feature_cols=["red", "green", "blue", "nir"],
+                output_path=f"{self.local_root}/models/raster_classifier/v24_rbgir_dct_pred",
+            ),
+            PredictClassifier(
+                input_path=f"{self.local_root}/processed/metadata_clean/v2",
+                model_name="raster2vec",
                 base_model=f"{self.local_root}/models/raster2vec_classifier/v1/checkpoints/last.ckpt",
                 feature_paths=[
                     f"{self.local_root}/processed/tiles/pa-*/satellite/v3",
@@ -493,8 +523,9 @@ class Workflow(luigi.Task):
                 feature_cols=["red", "green", "blue", "nir"],
                 output_path=f"{self.local_root}/models/raster2vec_classifier/v1_pred",
             ),
-            PredictRaster2VecClassifier(
+            PredictClassifier(
                 input_path=f"{self.local_root}/processed/metadata_clean/v2",
+                model_name="raster2vec",
                 base_model=f"{self.local_root}/models/raster2vec_classifier_asl/v1/checkpoints/last.ckpt",
                 feature_paths=[
                     f"{self.local_root}/processed/tiles/pa-*/satellite/v3",
