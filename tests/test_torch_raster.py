@@ -12,7 +12,7 @@ def test_raster_data_model(tmp_path, spark, metadata_v2, raster_features):
     dm = RasterDataModel(spark, metadata_v2, raster_feature_path, raster_feature_col)
     dm.setup()
     batch = next(dm.train_dataloader())
-    assert set(batch.keys()) == {"features", "label"}
+    assert set(batch.keys()) == {"features", "label", "surveyId"}
     assert batch["label"].device.type == "cpu"
 
 
