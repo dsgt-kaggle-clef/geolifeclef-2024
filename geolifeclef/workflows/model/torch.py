@@ -298,6 +298,7 @@ class TrainRaster2VecClassifier(luigi.Task):
     output_path = luigi.Parameter()
     batch_size = luigi.IntParameter(default=250)
     num_partitions = luigi.IntParameter(default=200)
+    epochs = luigi.IntParameter(default=20)
 
     def output(self):
         return [
@@ -306,7 +307,11 @@ class TrainRaster2VecClassifier(luigi.Task):
 
     def run(self):
         with spark_resource(
-            **{"spark.sql.parquet.enableVectorizedReader": False}
+            memory="30g",
+            **{
+                "spark.sql.parquet.enableVectorizedReader": False,
+                "spark.sql.shuffle.partitions": self.num_partitions,
+            },
         ) as spark:
             data_module = RasterDataModel(
                 spark,
@@ -324,7 +329,7 @@ class TrainRaster2VecClassifier(luigi.Task):
             model.model = backbone.model
 
             trainer = pl.Trainer(
-                max_epochs=20,
+                max_epochs=self.epochs,
                 accelerator="gpu" if torch.cuda.is_available() else "cpu",
                 reload_dataloaders_every_n_epochs=1,
                 default_root_dir=self.output_path,
@@ -375,7 +380,11 @@ class PredictClassifier(luigi.Task):
 
     def run(self):
         with spark_resource(
-            **{"spark.sql.parquet.enableVectorizedReader": False}
+            memory="30g",
+            **{
+                "spark.sql.parquet.enableVectorizedReader": False,
+                "spark.sql.shuffle.partitions": self.num_partitions,
+            },
         ) as spark:
             # data module
             data_module = Raster2VecClassifierDataModel(
@@ -687,6 +696,27 @@ class Workflow(luigi.Task):
                 feature_cols=["red", "green", "blue", "nir"],
                 output_path=f"{self.local_root}/models/raster2vec_classifier_asl/v1",
             ),
+            # v1 - initial 20 epopchs
+            # v2 - increase epochs to 50, fix po to pa bug
+            TrainRaster2VecClassifier(
+                input_path=f"{self.local_root}/processed/metadata_clean/v2",
+                base_model=f"{self.local_root}/models/raster2vec/v8/checkpoints/last.ckpt",
+                epochs=50,
+                feature_paths=[
+                    f"{self.local_root}/processed/tiles/pa-*/satellite/v3",
+                    f"{self.local_root}/processed/tiles/pa-*/LandCover/LandCover_MODIS_Terra-Aqua_500m/v3",
+                    *[
+                        f"{self.local_root}/processed/tiles/pa-*/BioClimatic_Average_1981-2010/bio{i}/v3"
+                        for i in [1, 10, 19]
+                    ],
+                ],
+                feature_cols=(
+                    ["red", "green", "blue", "nir"]
+                    + [f"LandCover_MODIS_Terra-Aqua_500m_{i}" for i in [9, 10, 11]]
+                    + [f"bio{i}" for i in [1, 10, 19]]
+                ),
+                output_path=f"{self.local_root}/models/raster2vec_classifier_multi/v2",
+            ),
         ]
 
         yield [
@@ -738,6 +768,25 @@ class Workflow(luigi.Task):
                 ],
                 feature_cols=["red", "green", "blue", "nir"],
                 output_path=f"{self.local_root}/models/raster2vec_classifier_asl/v1_pred",
+            ),
+            PredictClassifier(
+                input_path=f"{self.local_root}/processed/metadata_clean/v2",
+                model_name="raster2vec",
+                base_model=f"{self.local_root}/models/raster2vec_classifier_multi/v2/checkpoints/last.ckpt",
+                feature_paths=[
+                    f"{self.local_root}/processed/tiles/pa-*/satellite/v3",
+                    f"{self.local_root}/processed/tiles/pa-*/LandCover/LandCover_MODIS_Terra-Aqua_500m/v3",
+                    *[
+                        f"{self.local_root}/processed/tiles/pa-*/BioClimatic_Average_1981-2010/bio{i}/v3"
+                        for i in [1, 10, 19]
+                    ],
+                ],
+                feature_cols=(
+                    ["red", "green", "blue", "nir"]
+                    + [f"LandCover_MODIS_Terra-Aqua_500m_{i}" for i in [9, 10, 11]]
+                    + [f"bio{i}" for i in [1, 10, 19]]
+                ),
+                output_path=f"{self.local_root}/models/raster2vec_classifier_multi/v2_pred",
             ),
         ]
 
