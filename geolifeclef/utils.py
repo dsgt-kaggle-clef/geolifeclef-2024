@@ -11,7 +11,7 @@ os.environ["PYSPARK_DRIVER_PYTHON"] = sys.executable
 
 def get_spark(
     cores=os.cpu_count(),
-    memory="8g",  # os.environ.get("PYSPARK_DRIVER_MEMORY", f"{os.cpu_count()*1.5}g"),
+    memory="28g",  # os.environ.get("PYSPARK_DRIVER_MEMORY", f"{os.cpu_count()*1.5}g"),
     local_dir="/mnt/data/tmp",
     app_name="geolifeclef",
     **kwargs,
@@ -20,7 +20,7 @@ def get_spark(
     builder = (
         SparkSession.builder.config("spark.driver.memory", memory)
         .config("spark.sql.execution.arrow.pyspark.enabled", "true")
-        .config("spark.driver.maxResultSize", "4g")
+        .config("spark.driver.maxResultSize", "28g")
         .config("spark.local.dir", f"{local_dir}/{int(time.time())}")
     )
     for k, v in kwargs.items():

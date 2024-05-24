@@ -8,7 +8,17 @@ from pyspark.sql import functions as F
 from geolifeclef.utils import spark_resource
 
 from ..utils import RsyncGCSFiles
-from .xgboost import FitXGBoostModel
+from .xgboost import FitXGBoostModel, XGBoostWorkflow
+
+
+def list_directories(path):
+    entries = os.listdir(path)
+    directories = [
+        entry for entry in entries if os.path.isdir(os.path.join(path, entry))
+    ]
+    return directories
+
+    return prefixes
 
 
 class LogSplitData(luigi.Task):
@@ -69,6 +79,26 @@ class XGBoostSplitWorkflows(luigi.Task):
             )
             for strategy in ["naive"]
         ]
+
+        # filenames = [
+        #     filename
+        #     for filename in os.listdir(self.local_root + "/processed/metadata_split")
+        #     if filename != "_SUCCESS"
+        # ]
+        # for filename in filenames:
+        #     print(f"HEREEEEEE: {filename}")
+        #     yield [
+        #         FitXGBoostModel(
+        #             num_workers=8,
+        #             subsample=0.1,
+        #             multilabel_strategy=strategy,
+        #             input_path=self.local_root
+        #             + "/processed/metadata_split/"
+        #             + filename,
+        #             output_path=f"{self.local_root}/models/baseline_xgboost_{strategy}/{filename}",
+        #         )
+        #         for strategy in ["naive"]
+        #     ]
 
 
 if __name__ == "__main__":
