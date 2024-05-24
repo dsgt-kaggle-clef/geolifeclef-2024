@@ -225,17 +225,23 @@ class TrainRaster2Vec(luigi.Task):
     feature_paths = luigi.ListParameter()
     feature_cols = luigi.ListParameter()
     output_path = luigi.Parameter()
+    disable_asl = luigi.BoolParameter(default=True)
     batch_size = luigi.IntParameter(default=250)
     workers_count = luigi.IntParameter(default=8)
-    num_partitions = luigi.IntParameter(default=200)
+    num_partitions = luigi.IntParameter(default=400)
 
     def output(self):
         # save the model run
         return maybe_gcs_target(f"{self.output_path}/checkpoints/last.ckpt")
 
     def run(self):
-        with spark_resource(memory="16g") as spark:
-            # data module
+        with spark_resource(
+            memory="30g",
+            **{
+                "spark.sql.parquet.enableVectorizedReader": False,
+                "spark.sql.shuffle.partitions": self.num_partitions,
+            },
+        ) as spark:  # data module
             data_module = Raster2VecDataModel(
                 spark,
                 self.input_path,
@@ -248,7 +254,9 @@ class TrainRaster2Vec(luigi.Task):
             data_module.setup()
 
             num_layers, num_features, num_classes = data_module.get_shape()
-            model = Raster2Vec(num_layers, num_features, num_classes, disable_asl=True)
+            model = Raster2Vec(
+                num_layers, num_features, num_classes, disable_asl=self.disable_asl
+            )
 
             trainer = pl.Trainer(
                 max_epochs=20,
@@ -455,8 +463,10 @@ class Workflow(luigi.Task):
                 "tiles/po/satellite",
                 "tiles/pa-train/satellite",
                 "tiles/pa-test/satellite",
+                "tiles/po/LandCover/LandCover_MODIS_Terra-Aqua_500m",
                 "tiles/pa-train/LandCover/LandCover_MODIS_Terra-Aqua_500m",
                 "tiles/pa-test/LandCover/LandCover_MODIS_Terra-Aqua_500m",
+                "tiles/po/BioClimatic_Average_1981-2010",
                 "tiles/pa-train/BioClimatic_Average_1981-2010",
                 "tiles/pa-test/BioClimatic_Average_1981-2010",
                 "dct_timeseries/combined_timeseries_v2",
@@ -635,6 +645,27 @@ class Workflow(luigi.Task):
                 ],
                 feature_cols=["red", "green", "blue", "nir"],
                 output_path=f"{self.local_root}/models/raster2vec/v6",
+            ),
+            # v7 - model with a bunch of features, using asl loss
+            TrainRaster2Vec(
+                batch_size=500,
+                workers_count=16,
+                disable_asl=False,
+                input_path=f"{self.local_root}/processed/geolsh_graph/v1/edges/threshold=100000",
+                feature_paths=[
+                    f"{self.local_root}/processed/tiles/po/satellite/v3",
+                    f"{self.local_root}/processed/tiles/po/LandCover/LandCover_MODIS_Terra-Aqua_500m/v3",
+                    *[
+                        f"{self.local_root}/processed/tiles/po/BioClimatic_Average_1981-2010/bio{i}/v3"
+                        for i in [1, 10, 19]
+                    ],
+                ],
+                feature_cols=(
+                    ["red", "green", "blue", "nir"]
+                    + [f"LandCover_MODIS_Terra-Aqua_500m_{i}" for i in [9, 10, 11]]
+                    + [f"bio{i}" for i in [1, 10, 19]]
+                ),
+                output_path=f"{self.local_root}/models/raster2vec/v8",
             ),
             # v1 - embedding with no asl loss
             TrainRaster2VecClassifier(

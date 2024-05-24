@@ -1,41 +1,27 @@
 import os
 import warnings
-from collections import Counter
 from pathlib import Path
 
-import numpy as np
 import pytorch_lightning as pl
 import torch
 import torch_dct as dct
 from petastorm.spark import SparkDatasetConverter, make_spark_converter
-from pyspark.ml import Pipeline
-from pyspark.ml.feature import VectorAssembler
-from pyspark.ml.functions import array_to_vector, vector_to_array
-from pyspark.ml.linalg import SparseVector, VectorUDT
+from pyspark.ml.functions import vector_to_array
 from pyspark.sql import functions as F
 from torchvision.transforms import v2
 
-
-def _collect_sparse_labels(array):
-    """Turn a list of numbers into a sparse vector."""
-    max_species = 11255
-
-    @F.udf(VectorUDT())
-    def func(array):
-        if not array:
-            return SparseVector(max_species, [])
-        return SparseVector(max_species, sorted(Counter(array).items()))
-
-    return func(array)
+from geolifeclef.torch.transforms import collect_sparse_labels
 
 
 class ToReshapedLayers(v2.Transform):
-    def __init__(self, num_layers, num_features):
+    def __init__(self, num_layers, num_features, feature_names):
         self.num_layers = num_layers
         self.num_features = num_features
+        self.feature_names = feature_names
         super().__init__()
 
-    def _reshape(self, features):
+    def _reshape(self, batch, prefix):
+        features = torch.stack([batch[f"{prefix}_{x}"] for x in self.feature_names])
         return features.view(
             -1,
             self.num_layers,
@@ -45,13 +31,7 @@ class ToReshapedLayers(v2.Transform):
 
     def forward(self, batch):
         return {
-            "features": {
-                k: self._reshape(features)
-                for k, features in [
-                    ("anchor", batch["anchor_features"]),
-                    ("neighbor", batch["neighbor_features"]),
-                ]
-            },
+            "features": {k: self._reshape(batch, k) for k in ["anchor", "neighbor"]},
             "label": {
                 k: label
                 for k, label in [
@@ -91,12 +71,9 @@ class AugmentPairs(v2.Transform):
 
     def forward(self, batch):
         # apply the transform to both the anchor and the neighbor
-        return {
-            "features": {
-                k: self.transform(features) for k, features in batch["features"].items()
-            },
-            "label": batch["label"],
-        }
+        for k in batch["features"].keys():
+            batch["features"][k] = self.transform(batch["features"][k])
+        return batch
 
 
 class DCTRandomRotation(v2.Transform):
@@ -147,12 +124,9 @@ class AugmentDCTPairs(v2.Transform):
 
     def forward(self, batch):
         # apply the transform to both the anchor and the neighbor
-        return {
-            "features": {
-                k: self.transform(features) for k, features in batch["features"].items()
-            },
-            "label": batch["label"],
-        }
+        for k in batch["features"].keys():
+            batch["features"][k] = self.transform(batch["features"][k])
+        return batch
 
 
 class MiniBatchTriplet(v2.Transform):
@@ -197,10 +171,16 @@ class Raster2VecDataModel(pl.LightningDataModule):
         self.input_path = input_path
         self.feature_paths = feature_paths
         self.feature_col = feature_col
+        self.normalized_feature_col = [
+            self._normalize_column_name(x) for x in feature_col
+        ]
         self.batch_size = batch_size
         self.num_partitions = num_partitions
         self.workers_count = workers_count
         self.sample = sample
+
+    def _normalize_column_name(self, col):
+        return col.lower().replace("-", "_")
 
     def _load(self):
         def get_nodes(edges):
@@ -232,27 +212,31 @@ class Raster2VecDataModel(pl.LightningDataModule):
             df = df.join(
                 feature_df.select(
                     F.col("surveyId").cast("integer").alias("surveyId"),
-                    *[x for x in feature_df.columns if x in self.feature_col],
+                    *[
+                        F.col(x).alias(self._normalize_column_name(x))
+                        for x in feature_df.columns
+                        if x in self.feature_col
+                    ],
                 ).distinct(),
                 on="surveyId",
                 how="inner",
             )
-        for col in self.feature_col:
-            df = df.withColumn(col, array_to_vector(F.col(col).cast("array<float>")))
+        # for col in self.feature_col:
+        #     df = df.withColumn(col, array_to_vector(F.col(col).cast("array<float>")))
 
         edges_subset = edges.join(
             nodes.selectExpr("surveyId as srcSurveyId").distinct(),
             how="inner",
             on="srcSurveyId",
         )
-        data = df.select("surveyId", *self.feature_col).join(
+        data = df.select("surveyId", *self.normalized_feature_col).join(
             # only keep data if it's in our neighborhood
             self._get_labels(edges_subset),
             on="surveyId",
             how="left",
         )
         data.printSchema()
-        data = self._prepare_dataframe(data).cache()
+        data = self._prepare_dataframe(data).persist()
         data.printSchema()
         return (train_edges, valid_edges), nodes, data
 
@@ -275,7 +259,7 @@ class Raster2VecDataModel(pl.LightningDataModule):
         return (
             edges.groupBy(F.expr("srcSurveyId as surveyId"))
             .agg(
-                _collect_sparse_labels(
+                collect_sparse_labels(
                     F.collect_list("dstSpeciesId").cast("array<short>")
                 ).alias("labels_sp")
             )
@@ -284,15 +268,13 @@ class Raster2VecDataModel(pl.LightningDataModule):
 
     def _prepare_dataframe(self, df):
         """Prepare the DataFrame for training by ensuring correct types and repartitioning"""
-        asm = VectorAssembler(inputCols=self.feature_col, outputCol="features")
-        res = asm.transform(df)
-        return res.select(
+        return df.select(
             "surveyId",
-            vector_to_array("features", "float32").alias("features"),
+            *self.normalized_feature_col,
             vector_to_array("labels_sp", "float32")
             .cast("array<boolean>")
             .alias("label"),
-        )
+        ).repartition(self.num_partitions)
 
     def get_shape(self):
         row = self.train_data.first()
@@ -310,24 +292,28 @@ class Raster2VecDataModel(pl.LightningDataModule):
         return (
             edges.join(
                 data.selectExpr(
-                    "surveyId as src", "features as src_features", "label as src_label"
+                    "surveyId as src",
+                    "label as src_label",
+                    *[f"{x} as src_{x}" for x in self.normalized_feature_col],
                 ).distinct(),
                 on="src",
                 how="inner",
             )
             .join(
                 data.selectExpr(
-                    "surveyId as dst", "features as dst_features", "label as dst_label"
+                    "surveyId as dst",
+                    "label as dst_label",
+                    *[f"{x} as dst_{x}" for x in self.normalized_feature_col],
                 ).distinct(),
                 on="dst",
                 how="inner",
             )
             .selectExpr(
                 "src as anchor_id",
-                "src_features as anchor_features",
+                *[f"src_{x} as anchor_{x}" for x in self.normalized_feature_col],
                 "src_label as anchor_label",
                 "dst as neighbor_id",
-                "dst_features as neighbor_features",
+                *[f"dst_{x} as neighbor_{x}" for x in self.normalized_feature_col],
                 "dst_label as neighbor_label",
             )
         )
@@ -337,8 +323,9 @@ class Raster2VecDataModel(pl.LightningDataModule):
         print(
             "counts", train_edges.count(), valid_edges.count(), data.count(), flush=True
         )
-        self.train_data = self.join_edge_data(train_edges, data).cache()
-        self.valid_data = self.join_edge_data(valid_edges, data).cache()
+        self.train_data = self.join_edge_data(train_edges, data)
+        self.valid_data = self.join_edge_data(valid_edges, data)
+        self.train_data.printSchema()
 
         with warnings.catch_warnings():
             warnings.simplefilter(action="ignore", category=FutureWarning)
@@ -349,7 +336,9 @@ class Raster2VecDataModel(pl.LightningDataModule):
         num_layers, _, _ = self.get_shape()
         return v2.Compose(
             [
-                ToReshapedLayers(num_layers, 8),
+                ToReshapedLayers(
+                    num_layers, 8, feature_names=self.normalized_feature_col
+                ),
                 # IDCTransform(),
                 # *([AugmentPairs()] if augment else []),
                 *([AugmentDCTPairs()] if augment else []),
