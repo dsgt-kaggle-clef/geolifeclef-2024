@@ -478,7 +478,7 @@ class Workflow(luigi.Task):
                 "tiles/po/BioClimatic_Average_1981-2010",
                 "tiles/pa-train/BioClimatic_Average_1981-2010",
                 "tiles/pa-test/BioClimatic_Average_1981-2010",
-                "dct_timeseries/combined_timeseries_v2",
+                "dct_timeseries/combined_timeseries_v3",
             ]
         ]
 
@@ -639,6 +639,22 @@ class Workflow(luigi.Task):
                 ),
                 output_path=f"{self.local_root}/models/raster_classifier/v24_rbgir_modis_bio_idct",
             ),
+            # time series stuff
+            TrainRasterClassifier(
+                input_path=f"{self.local_root}/processed/metadata_clean/v2",
+                feature_paths=[
+                    f"{self.local_root}/processed/dct_timeseries/combined_timeseries_v3"
+                ],
+                feature_cols=(
+                    "ts_red",
+                    "ts_blue",
+                    "ts_green",
+                    "ts_nir",
+                    "ts_swir1",
+                    "ts_swir2",
+                ),
+                output_path=f"{self.local_root}/models/raster_classifier/v24_timeseries",
+            ),
             # v1 - initial model
             # v2 - fix more bugs
             # v3 - use po dataset
@@ -748,6 +764,23 @@ class Workflow(luigi.Task):
                     + [f"LandCover_MODIS_Terra-Aqua_500m_{i}" for i in [9, 10, 11]]
                 ),
                 output_path=f"{self.local_root}/models/raster_classifier/v24_rbgir_modis_dct_pred",
+            ),
+            PredictClassifier(
+                input_path=f"{self.local_root}/processed/metadata_clean/v2",
+                model_name="raster",
+                base_model=f"{self.local_root}/models/raster_classifier/v24_timeseries/checkpoints/last.ckpt",
+                feature_paths=[
+                    f"{self.local_root}/processed/dct_timeseries/combined_timeseries_v3"
+                ],
+                feature_cols=(
+                    "ts_red",
+                    "ts_blue",
+                    "ts_green",
+                    "ts_nir",
+                    "ts_swir1",
+                    "ts_swir2",
+                ),
+                output_path=f"{self.local_root}/models/raster_classifier/v24_timeseries_pred",
             ),
             PredictClassifier(
                 input_path=f"{self.local_root}/processed/metadata_clean/v2",
