@@ -478,7 +478,7 @@ class Workflow(luigi.Task):
                 "tiles/po/BioClimatic_Average_1981-2010",
                 "tiles/pa-train/BioClimatic_Average_1981-2010",
                 "tiles/pa-test/BioClimatic_Average_1981-2010",
-                "dct_timeseries/combined_timeseries_v3",
+                "dct_timeseries/combined_timeseries_v4",
             ]
         ]
 
@@ -643,7 +643,7 @@ class Workflow(luigi.Task):
             TrainRasterClassifier(
                 input_path=f"{self.local_root}/processed/metadata_clean/v2",
                 feature_paths=[
-                    f"{self.local_root}/processed/dct_timeseries/combined_timeseries_v3"
+                    f"{self.local_root}/processed/dct_timeseries/combined_timeseries_v4"
                 ],
                 feature_cols=(
                     "ts_red",
@@ -770,7 +770,7 @@ class Workflow(luigi.Task):
                 model_name="raster",
                 base_model=f"{self.local_root}/models/raster_classifier/v24_timeseries/checkpoints/last.ckpt",
                 feature_paths=[
-                    f"{self.local_root}/processed/dct_timeseries/combined_timeseries_v3"
+                    f"{self.local_root}/processed/dct_timeseries/combined_timeseries_v4"
                 ],
                 feature_cols=(
                     "ts_red",
