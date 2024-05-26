@@ -58,9 +58,11 @@ class XGBoostWorkflow(luigi.Task):
 
 if __name__ == "__main__":
     parser = ArgumentParser()
-    parser.add_argument("--scheduler-host", default="localhost")
+    parser.add_argument(
+        "--scheduler-host", default="services.us-central1-a.c.dsgt-clef-2024.internal"
+    )
     args = parser.parse_args()
-
+    # bench mark between split and none split model
     luigi.build(
         [XGBoostWorkflow()],
         scheduler_host=args.scheduler_host,
