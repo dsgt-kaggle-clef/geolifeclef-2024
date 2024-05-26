@@ -5,7 +5,6 @@ usage:
 """
 
 import itertools
-import os
 import shutil
 from argparse import ArgumentParser
 from multiprocessing import Pool
@@ -204,6 +203,9 @@ class ConsolidateParquet(luigi.Task):
 def parse_args():
     parser = ArgumentParser()
     parser.add_argument("--test-mode", action="store_true")
+    parser.add_argument(
+        "--scheduler-host", default="services.us-central1-a.c.dsgt-clef-2024.internal"
+    )
     return parser.parse_args()
 
 
@@ -258,8 +260,9 @@ if __name__ == "__main__":
                 )
             ]
         )
+
     luigi.build(
         tasks,
-        scheduler_host="services.us-central1-a.c.dsgt-clef-2024.internal",
+        scheduler_host=args.scheduler_host,
         workers=4,
     )

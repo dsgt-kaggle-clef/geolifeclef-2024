@@ -87,7 +87,7 @@ class BaseFitModel(luigi.Task):
 
     num_folds = luigi.IntParameter(default=3)
     seed = luigi.IntParameter(default=42)
-    shuffle_partitions = luigi.IntParameter(default=500)
+    shuffle_partitions = luigi.IntParameter(default=200)
 
     def output(self):
         return maybe_gcs_target(f"{self.output_path}/_SUCCESS")
@@ -164,13 +164,6 @@ class BaseFitModel(luigi.Task):
             metricName="microF1Measure",
         )
 
-    def _calculate_multilabel_stats(self, train):
-        """Calculate statistics about the number of rows with multiple labels"""
-
-        train.groupBy("surveyId").count().describe().write.csv(
-            f"{self.output_path}/multilabel_stats/dataset=train", mode="overwrite"
-        )
-
     def run(self):
         with spark_resource(
             **{
@@ -179,7 +172,6 @@ class BaseFitModel(luigi.Task):
             },
         ) as spark:
             train = self._load(spark).cache()
-            self._calculate_multilabel_stats(train)
 
             # write the model to disk
             pipeline = self._pipeline()
