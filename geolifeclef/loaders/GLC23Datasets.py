@@ -58,6 +58,10 @@ class PatchesDataset(Dataset):
         item = self.items.iloc[index].to_dict()
         self.provider.plot_patch(item)
 
+    def plot_custom(self, index):
+        item = self.items.iloc[index].to_dict()
+        self.provider.plot_custom(item)
+
 
 class PatchesDatasetMultiLabel(PatchesDataset):
     def __init__(

@@ -76,6 +76,39 @@ class PatchProvider(object):
         plt.tight_layout(rect=[0, 0.03, 1, 0.95])
         plt.show()
 
+    def plot_custom(self, item):
+        patch = self[item]
+
+        # support 20 items in a 2x10 grid
+        # create a figure with a grid of subplots
+        rows, cols = 3, 7
+        fig, axs = plt.subplots(rows, cols, figsize=(8, 4))
+
+        # flatten the subplots array to easily access the subplots
+        axs = axs.flatten()
+
+        # make the font smaller so they dont overlap, set to 8
+
+        # loop through the layers of patch data
+        for ax, i in zip(axs, range(self.nb_layers)):
+            # display the layer on the corresponding subplot
+            ax.imshow(patch[i])
+            ax.set_title(self.bands_names[i].split("_")[0], size=10)
+            ax.axis("off")
+
+        # remove empty subplots
+        for i in range(self.nb_layers, rows * cols):
+            fig.delaxes(axs[i])
+
+        # lat, lon, surveyId
+        lat, lon, surveyId = item["lat"], item["lon"], item["surveyId"]
+        plt.suptitle(
+            f"Tiles for survey {int(surveyId)} at {lat:.2f}, {lon:.2f}",
+        )
+
+        # show the plot
+        plt.tight_layout()
+
 
 class MetaPatchProvider(PatchProvider):
     def __init__(self, providers, transform=None):
